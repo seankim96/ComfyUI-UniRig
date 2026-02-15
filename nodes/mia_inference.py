@@ -75,8 +75,6 @@ def ensure_mia_models() -> bool:
     Returns:
         True if all models are available, False otherwise.
     """
-    import shutil
-
     missing = [m for m in MIA_MODEL_FILES if not (MIA_MODELS_DIR / m).exists()]
 
     if not missing:
@@ -86,18 +84,22 @@ def ensure_mia_models() -> bool:
 
     try:
         from huggingface_hub import hf_hub_download
+        import tempfile
 
         MIA_MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
         for model_file in missing:
             print(f"[MIA] Downloading {model_file}...")
-            # Download to HF cache, then copy to our flat directory
-            cached_path = hf_hub_download(
-                repo_id="jasongzy/Make-It-Animatable",
-                filename=f"output/best/new/{model_file}",
-            )
             target_path = MIA_MODELS_DIR / model_file
-            shutil.copy2(cached_path, target_path)
+            with tempfile.TemporaryDirectory(dir=str(MIA_MODELS_DIR)) as tmp_dir:
+                hf_hub_download(
+                    repo_id="jasongzy/Make-It-Animatable",
+                    filename=f"output/best/new/{model_file}",
+                    local_dir=tmp_dir,
+                    local_dir_use_symlinks=False,
+                )
+                downloaded = Path(tmp_dir) / "output" / "best" / "new" / model_file
+                downloaded.rename(target_path)
 
         print(f"[MIA] All models downloaded to {MIA_MODELS_DIR}")
         return True

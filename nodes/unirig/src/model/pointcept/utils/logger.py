@@ -8,6 +8,8 @@ Please cite our work if the code is helpful to you.
 """
 
 import logging
+
+log = logging.getLogger("unirig")
 import torch
 import torch.distributed as dist
 
@@ -125,7 +127,7 @@ def print_log(msg, logger=None, level=logging.INFO):
             object or "root".
     """
     if logger is None:
-        print(msg)
+        logging.getLogger("unirig").log(level, msg)
     elif isinstance(logger, logging.Logger):
         logger.log(level, msg)
     elif logger == "silent":

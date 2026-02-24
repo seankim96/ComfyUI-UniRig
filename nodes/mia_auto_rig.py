@@ -1,11 +1,12 @@
 """
 MIAAutoRig - Fast humanoid rigging using Make-It-Animatable.
-
-Uses comfy-env isolated environment for GPU dependencies.
 """
 
+import logging
 import time
 from pathlib import Path
+
+log = logging.getLogger("unirig")
 
 # ComfyUI folder paths
 try:
@@ -82,16 +83,16 @@ class MIAAutoRig:
         total_start = time.time()
 
         # DEBUG: Check visual immediately on receipt (before any MIA code)
-        print(f"[MIAAutoRig] DEBUG: Received mesh visual type: {type(trimesh.visual).__name__ if hasattr(trimesh, 'visual') else 'NO VISUAL'}")
+        log.debug("Received mesh visual type: %s", type(trimesh.visual).__name__ if hasattr(trimesh, 'visual') else 'NO VISUAL')
         if hasattr(trimesh, 'visual') and hasattr(trimesh.visual, 'material'):
-            print(f"[MIAAutoRig] DEBUG:   Material: {type(trimesh.visual.material).__name__}")
+            log.debug("  Material: %s", type(trimesh.visual.material).__name__)
 
-        print(f"[MIAAutoRig] Starting Make-It-Animatable rigging pipeline...")
-        print(f"[MIAAutoRig] Options: no_fingers={no_fingers}, use_normal={use_normal}, reset_to_rest={reset_to_rest}")
+        log.info("Starting Make-It-Animatable rigging pipeline...")
+        log.info("Options: no_fingers=%s, use_normal=%s, reset_to_rest=%s", no_fingers, use_normal, reset_to_rest)
 
         # model is a config dict from MIALoadModel - extract settings
         cache_to_gpu = model.get("cache_to_gpu", True)
-        print(f"[MIAAutoRig] Config: cache_to_gpu={cache_to_gpu}")
+        log.info("Config: cache_to_gpu=%s", cache_to_gpu)
 
         # Load models internally (downloads from HuggingFace if needed)
         cache_key = load_mia_models(cache_to_gpu=cache_to_gpu)
@@ -119,10 +120,10 @@ class MIAAutoRig:
         )
 
         total_time = time.time() - total_start
-        print(f"[MIAAutoRig] ========================================")
-        print(f"[MIAAutoRig] Make-It-Animatable rigging complete!")
-        print(f"[MIAAutoRig] Total time: {total_time:.2f}s")
-        print(f"[MIAAutoRig] Output: {result_path}")
-        print(f"[MIAAutoRig] ========================================")
+        log.info("========================================")
+        log.info("Make-It-Animatable rigging complete!")
+        log.info("Total time: %.2fs", total_time)
+        log.info("Output: %s", result_path)
+        log.info("========================================")
 
         return (result_path,)

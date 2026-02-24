@@ -3,6 +3,9 @@ UniRig Orientation Check Node - Visual verification of mesh orientation for MIA 
 """
 
 import os
+import logging
+
+log = logging.getLogger("unirig")
 # Set osmesa for headless rendering BEFORE any OpenGL imports
 os.environ['PYOPENGL_PLATFORM'] = 'osmesa'
 
@@ -14,7 +17,8 @@ from pathlib import Path
 # ComfyUI folder paths
 try:
     import folder_paths
-except:
+except Exception as e:
+    log.debug("folder_paths not available: %s", e)
     folder_paths = None
 
 # Path to bundled reference mesh (now in nodes/blender/, so go up two levels to custom_node root)
@@ -100,7 +104,7 @@ def render_mesh_front_view(mesh: trimesh.Trimesh, width: int, height: int) -> np
         return color
 
     except Exception as e:
-        print(f"[OrientationCheck] Pyrender failed: {e}, using wireframe fallback")
+        log.info("Pyrender failed: %s, using wireframe fallback", e)
         return create_wireframe_visualization(mesh, width, height)
 
 
@@ -154,7 +158,7 @@ def create_wireframe_visualization(mesh: trimesh.Trimesh, width: int, height: in
 def load_reference_mesh():
     """Load the bundled reference mesh for comparison."""
     if not REFERENCE_MESH_PATH.exists():
-        print(f"[OrientationCheck] Reference mesh not found: {REFERENCE_MESH_PATH}")
+        log.info("Reference mesh not found: %s", REFERENCE_MESH_PATH)
         return None
 
     try:
@@ -163,7 +167,7 @@ def load_reference_mesh():
             ref_mesh = ref_mesh.dump(concatenate=True)
         return ref_mesh
     except Exception as e:
-        print(f"[OrientationCheck] Failed to load reference mesh: {e}")
+        log.info("Failed to load reference mesh: %s", e)
         return None
 
 
@@ -182,10 +186,10 @@ def create_comparison_image(user_mesh: trimesh.Trimesh, ref_mesh: trimesh.Trimes
     ref_width = max(100, int(max_height * ref_aspect))
 
     # Render both meshes
-    print(f"[OrientationCheck] Rendering user mesh at {user_width}x{max_height}")
+    log.info("Rendering user mesh at %sx%s", user_width, max_height)
     user_img = render_mesh_front_view(user_mesh, user_width, max_height)
 
-    print(f"[OrientationCheck] Rendering reference at {ref_width}x{max_height}")
+    log.info("Rendering reference at %sx%s", ref_width, max_height)
     ref_img = render_mesh_front_view(ref_mesh, ref_width, max_height)
 
     # Create combined image
@@ -202,7 +206,8 @@ def create_comparison_image(user_mesh: trimesh.Trimesh, ref_mesh: trimesh.Trimes
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
         font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
-    except:
+    except Exception as e:
+        log.debug("DejaVu fonts not found, using default: %s", e)
         font = ImageFont.load_default()
         font_small = font
 
@@ -290,24 +295,24 @@ class UniRigOrientationCheck:
         Returns:
             tuple: (ComfyUI IMAGE tensor,)
         """
-        print(f"[OrientationCheck] Checking mesh orientation...")
-        print(f"[OrientationCheck] Mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
+        log.info("Checking mesh orientation...")
+        log.info(f"Mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
 
         # Get mesh bounds info
         bounds = mesh.bounds
         dims = bounds[1] - bounds[0]
-        print(f"[OrientationCheck] Dimensions: X={dims[0]:.3f}, Y={dims[1]:.3f}, Z={dims[2]:.3f}")
+        log.info(f"Dimensions: X={dims[0]:.3f}, Y={dims[1]:.3f}, Z={dims[2]:.3f}")
 
         # Determine orientation
         axis_names = ['X', 'Y', 'Z']
         tallest_idx = np.argmax(dims)
         tallest_axis = axis_names[tallest_idx]
-        print(f"[OrientationCheck] Tallest axis: {tallest_axis}")
+        log.info("Tallest axis: %s", tallest_axis)
 
         if tallest_axis == 'Y':
-            print(f"[OrientationCheck] [OK] Orientation appears correct (Y-up)")
+            log.info("[OK] Orientation appears correct (Y-up)")
         else:
-            print(f"[OrientationCheck] [WARNING] {tallest_axis} is tallest, expected Y for Y-up")
+            log.warning("[WARNING] %s is tallest, expected Y for Y-up", tallest_axis)
 
         # Load reference mesh
         ref_mesh = load_reference_mesh()
@@ -317,7 +322,7 @@ class UniRigOrientationCheck:
             image = create_comparison_image(mesh, ref_mesh, max_height)
         else:
             # Fallback: just render user mesh with overlay
-            print(f"[OrientationCheck] Reference not available, rendering single view")
+            log.info("Reference not available, rendering single view")
             user_dims = mesh.bounds[1] - mesh.bounds[0]
             aspect = user_dims[0] / user_dims[1] if user_dims[1] > 0 else 1.0
             width = max(128, int(max_height * aspect))
@@ -328,6 +333,6 @@ class UniRigOrientationCheck:
         image_tensor = torch.from_numpy(image).float() / 255.0
         image_tensor = image_tensor.unsqueeze(0)  # Add batch dimension
 
-        print(f"[OrientationCheck] Done. Output shape: {image_tensor.shape}")
+        log.info("Done. Output shape: %s", image_tensor.shape)
 
         return (image_tensor,)

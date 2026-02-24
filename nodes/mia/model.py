@@ -6,7 +6,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import repeat
+import logging
 
+log = logging.getLogger("unirig")
 # Lazy import torch_cluster - not available in ComfyUI main process
 _fps_func = None
 def _get_fps():
@@ -370,9 +372,7 @@ class PCAE(nn.Module):
                 ckpt_param = ckpt[k]
                 model_param = access_attr(self, k)
                 if ckpt_param.shape != model_param.shape:
-                    print(
-                        f"Size mismatch for {k}: {ckpt_param.shape} from checkpoint vs {model_param.shape} from model. Ignoring it."
-                    )
+                    log.info("Size mismatch for %s: %s from checkpoint vs %s from model. Ignoring it.", k, ckpt_param.shape, model_param.shape)
                     ckpt[k] = model_param.to(ckpt_param)
 
         params2remove = [
@@ -391,7 +391,7 @@ class PCAE(nn.Module):
         )
         for k in params2remove:
             if k in ckpt:
-                print(f"Removing deprecated params {k} from checkpoint.")
+                log.info("Removing deprecated params %s from checkpoint.", k)
                 del ckpt[k]
 
         params2partial = []
@@ -405,9 +405,7 @@ class PCAE(nn.Module):
                 model_param = access_attr(self, k)
                 if ckpt_param.shape != model_param.shape:
                     assert ckpt_param.shape[0] == model_param.shape[0] and ckpt_param.shape[-1] == model_param.shape[-1]
-                    print(
-                        f"Size mismatch for {k}: {ckpt_param.shape} from checkpoint vs {model_param.shape} from model. Partially loading it."
-                    )
+                    log.info("Size mismatch for %s: %s from checkpoint vs %s from model. Partially loading it.", k, ckpt_param.shape, model_param.shape)
                     if ckpt_param.shape[1] < model_param.shape[1]:
                         ckpt_param_new = model_param.clone().detach()
                         ckpt_param_new[:, : ckpt_param.shape[1]] = ckpt_param
@@ -419,17 +417,17 @@ class PCAE(nn.Module):
 
     def load(self, pth_path: str, epoch=-1, strict=True, adapt=True):
         pth_path = find_ckpt(pth_path, epoch=epoch)
-        checkpoint = torch.load(pth_path, map_location="cpu")
+        checkpoint = torch.load(pth_path, map_location="cpu", weights_only=True)
         model_state_dict = checkpoint["model"]
         if adapt:
             model_state_dict = self.adapt_ckpt(model_state_dict)
         self.load_state_dict(model_state_dict, strict=strict)
-        print(f"Loaded model from {pth_path}")
+        log.info("Loaded model from %s", pth_path)
         return self
 
     def load_base(self, pth_path: str):
-        self.base.load_state_dict(torch.load(pth_path, map_location="cpu")["model"], strict=True)
-        print(f"Loaded base model from {pth_path}")
+        self.base.load_state_dict(torch.load(pth_path, map_location="cpu", weights_only=True)["model"], strict=True)
+        log.info("Loaded base model from %s", pth_path)
         return self
 
     def freeze_base(self):

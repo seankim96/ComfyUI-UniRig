@@ -16,7 +16,9 @@ import math
 import tempfile
 import base64
 import os
+import logging
 
+log = logging.getLogger("unirig")
 
 def export_rigged_fbx(
     joints: np.ndarray,
@@ -68,8 +70,8 @@ def export_rigged_fbx(
     import bpy
     from mathutils import Vector, Matrix, Quaternion
 
-    print(f"[Direct FBX Export] Input joints: {joints.shape}")
-    print(f"[Direct FBX Export] Output: {output_fbx}")
+    log.info("Input joints: %s", joints.shape)
+    log.info("Output: %s", output_fbx)
 
     # Convert inputs to numpy arrays
     joints = np.array(joints, dtype=np.float32)
@@ -91,15 +93,15 @@ def export_rigged_fbx(
         uv_faces = None
 
     if texture_data_base64 and len(texture_data_base64) > 0:
-        print(f"[Direct FBX Export] Found texture data: {texture_format} ({len(texture_data_base64) // 1024}KB base64)")
+        log.info(f"Found texture data: {texture_format} ({len(texture_data_base64) // 1024}KB base64)")
     else:
-        print(f"[Direct FBX Export] No texture data found")
+        log.info("No texture data found")
 
-    print(f"[Direct FBX Export] Loaded skeleton with {len(joints)} joints")
+    log.info(f"Loaded skeleton with {len(joints)} joints")
     if vertices is not None:
-        print(f"[Direct FBX Export] Found mesh with {len(vertices)} vertices")
+        log.info(f"Found mesh with {len(vertices)} vertices")
     if skin is not None:
-        print(f"[Direct FBX Export] Skin weights shape: {skin.shape}")
+        log.info("Skin weights shape: %s", skin.shape)
 
     # Clean default scene
     _clean_bpy()
@@ -135,7 +137,7 @@ def export_rigged_fbx(
 
         # Add UV coordinates if available
         if uv_coords is not None and uv_faces is not None and len(uv_coords) > 0:
-            print(f"[Direct FBX Export] Adding UV coordinates: {len(uv_coords)} UVs")
+            log.info(f"Adding UV coordinates: {len(uv_coords)} UVs")
             uv_layer = mesh.uv_layers.new(name='UVMap')
 
             for face_idx, poly in enumerate(mesh.polygons):
@@ -145,7 +147,7 @@ def export_rigged_fbx(
                         if uv_idx < len(uv_coords):
                             uv_layer.data[loop_idx].uv = uv_coords[uv_idx]
 
-            print(f"[Direct FBX Export] UV coordinates applied")
+            log.info("UV coordinates applied")
 
         # Make object from mesh
         obj = bpy.data.objects.new('character', mesh)
@@ -156,14 +158,14 @@ def export_rigged_fbx(
             _apply_texture(obj, texture_data_base64, material_name)
 
     # Create armature
-    print("[Direct FBX Export] Creating armature...")
+    log.info("Creating armature...")
     bpy.ops.object.armature_add(enter_editmode=True)
     armature = bpy.data.armatures.get('Armature')
     edit_bones = armature.edit_bones
 
     J = joints.shape[0]
     if tails is None:
-        print(f"[Direct FBX Export] Tails not provided, auto-generating...")
+        log.info("Tails not provided, auto-generating...")
         tails = joints.copy()
         tails[:, 2] += extrude_size
 
@@ -229,7 +231,7 @@ def export_rigged_fbx(
 
     # Add skinning weights
     if vertices is not None and skin is not None:
-        print("[Direct FBX Export] Adding skinning weights...")
+        log.info("Adding skinning weights...")
         bpy.ops.object.mode_set(mode='OBJECT')
         objects = bpy.data.objects
         for o in bpy.context.selected_objects:
@@ -259,11 +261,11 @@ def export_rigged_fbx(
                     continue
                 ob.vertex_groups[n].add([v], vertex_group_reweight[v, ii], 'REPLACE')
 
-    print("[Direct FBX Export] Armature created successfully")
+    log.info("Armature created successfully")
 
     # Apply Mixamo-standard object transforms
     if is_mixamo_skeleton:
-        print("[Direct FBX Export] Applying Mixamo-standard object transforms...")
+        log.info("Applying Mixamo-standard object transforms...")
         bpy.ops.object.mode_set(mode='OBJECT')
 
         arm_obj = bpy.data.objects.get('Armature')
@@ -274,7 +276,7 @@ def export_rigged_fbx(
         bpy.context.view_layer.update()
 
     # Export to FBX
-    print("[Direct FBX Export] Exporting to FBX...")
+    log.info("Exporting to FBX...")
     os.makedirs(os.path.dirname(output_fbx) if os.path.dirname(output_fbx) else '.', exist_ok=True)
 
     bpy.ops.export_scene.fbx(
@@ -284,8 +286,8 @@ def export_rigged_fbx(
         path_mode='COPY',
         embed_textures=True,
     )
-    print(f"[Direct FBX Export] Saved to: {output_fbx}")
-    print("[Direct FBX Export] Done!")
+    log.info("Saved to: %s", output_fbx)
+    log.info("Done!")
 
     return output_fbx
 
@@ -329,7 +331,7 @@ def _extrude_bone(edit_bones, name, parent_name, head, tail, connect):
 
 def _convert_smpl_tpose(joints, tails, vertices, skin, names):
     """Convert SMPL skeleton to T-pose if needed."""
-    print("[Direct FBX Export] Detected SMPL skeleton, checking T-pose...")
+    log.info("Detected SMPL skeleton, checking T-pose...")
 
     l_shoulder_idx = names.index('L_Shoulder')
     l_elbow_idx = names.index('L_Elbow')
@@ -363,10 +365,10 @@ def _convert_smpl_tpose(joints, tails, vertices, skin, names):
     l_arm_vec_norm = l_arm_vec / (np.linalg.norm(l_arm_vec) + 1e-8)
 
     if abs(l_arm_vec_norm[1]) < 0.1:
-        print("[Direct FBX Export] Arms already horizontal (T-pose)")
+        log.info("Arms already horizontal (T-pose)")
         return joints, tails, vertices
 
-    print(f"[Direct FBX Export] Converting to T-pose...")
+    log.info("Converting to T-pose...")
 
     # Compute arm lengths
     l_upper_len = np.linalg.norm(l_elbow - l_shoulder)
@@ -435,14 +437,14 @@ def _convert_smpl_tpose(joints, tails, vertices, skin, names):
         tails[l_wrist_idx] = new_l_wrist + l_tpose_dir * wrist_tail_len
         tails[r_wrist_idx] = new_r_wrist + r_tpose_dir * wrist_tail_len
 
-    print("[Direct FBX Export] T-pose conversion complete")
+    log.info("T-pose conversion complete")
     return joints, tails, vertices
 
 
 def _normalize_mixamo(joints, tails, vertices, skin, names):
     """Normalize Mixamo skeleton for animation compatibility."""
     from mathutils import Vector, Quaternion
-    print("[Direct FBX Export] Normalizing Mixamo skeleton...")
+    log.info("Normalizing Mixamo skeleton...")
 
     # Get key bone indices
     hips_idx = None
@@ -668,7 +670,7 @@ def _normalize_mixamo(joints, tails, vertices, skin, names):
     if tails is not None:
         tails = convert_to_yup(tails) * 100.0
 
-    print("[Direct FBX Export] Mixamo normalization complete")
+    log.info("Mixamo normalization complete")
     return joints, tails, vertices
 
 
@@ -676,7 +678,7 @@ def _apply_texture(obj, texture_data_base64, material_name):
     """Apply texture to mesh object."""
     import bpy  # Lazy import
 
-    print(f"[Direct FBX Export] Creating textured material...")
+    log.info("Creating textured material...")
     try:
         # Ensure material_name is not None
         if material_name is None:
@@ -723,7 +725,7 @@ def _apply_texture(obj, texture_data_base64, material_name):
         for poly in obj.data.polygons:
             poly.material_index = 0
 
-        print(f"[Direct FBX Export] Textured material applied")
+        log.info("Textured material applied")
 
         try:
             os.remove(tmp_texture_path)
@@ -731,14 +733,14 @@ def _apply_texture(obj, texture_data_base64, material_name):
             pass
 
     except Exception as tex_err:
-        print(f"[Direct FBX Export] Warning: Could not apply texture: {tex_err}")
+        log.warning("Warning: Could not apply texture: %s", tex_err)
 
 
 def _fix_mixamo_bone_orientations(edit_bones, names):
     """Fix bone orientations for Mixamo compatibility."""
     from mathutils import Vector  # Lazy import
 
-    print("[Direct FBX Export] Fixing bone orientations for Mixamo...")
+    log.info("Fixing bone orientations for Mixamo...")
 
     DEFAULT_BONE_LENGTH = 5.0
 
@@ -815,7 +817,7 @@ def _fix_mixamo_bone_orientations(edit_bones, names):
 
 def _set_smpl_bone_rolls(edit_bones, names, J):
     """Set bone rolls for SMPL compatibility."""
-    print("[Direct FBX Export] Setting bone rolls for SMPL...")
+    log.info("Setting bone rolls for SMPL...")
 
     for i in range(J):
         bone = edit_bones.get(names[i])

@@ -38,7 +38,9 @@ from ..modules.transformer_blocks import (
 )
 
 from .tsal_base import ShapeAsLatentModule
+import logging
 
+log = logging.getLogger("unirig")
 
 class CrossAttentionEncoder(nn.Module):
 
@@ -381,7 +383,7 @@ class ShapeAsLatentPerceiver(ShapeAsLatentModule):
                 p.requires_grad = False
             for p in self.pre_kl.parameters():
                 p.requires_grad = False
-            print("freeze encoder and pre kl")
+            log.info("freeze encoder and pre kl")
 
     def forward(self,
                 pc: torch.FloatTensor,
@@ -603,7 +605,7 @@ class ShapeAsLatentPerceiverEncoder(ShapeAsLatentModule):
         if freeze_encoder:
             for p in self.encoder.parameters():
                 p.requires_grad = False
-            print("freeze encoder")
+            log.info("freeze encoder")
         self.width = width
 
     def encode_latents(self,

@@ -12,7 +12,10 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 import trimesh
+import logging
+import comfy.model_management
 
+log = logging.getLogger("unirig")
 # Pure PyTorch implementations of pytorch3d quaternion functions
 # These replace the pytorch3d.transforms dependency
 
@@ -353,7 +356,8 @@ def synchronize():
 def init_dist():
     from datetime import timedelta
 
-    assert torch.cuda.is_available(), "cuda is not available"
+    device = comfy.model_management.get_torch_device()
+    assert device.type != "cpu", "No accelerator available (need CUDA or similar)"
     assert (
         "RANK" in os.environ and "WORLD_SIZE" in os.environ
     ), "To use distributed mode, use `python -m torch.distributed.launch` or `torchrun` to launch the program"
@@ -367,7 +371,7 @@ def init_dist():
         os.environ["NCCL_ASYNC_ERROR_HANDLING"] = "1"
     else:
         if local_rank == 0:
-            print("Using gloo as backend, because NCCL does not support using the same device for multiple ranks")
+            log.info("Using gloo as backend, because NCCL does not support using the same device for multiple ranks")
         backend = "gloo"
         device_id = local_rank % device_count
 
@@ -588,7 +592,7 @@ def compose_transform(transform: Tensor_or_Array) -> Tensor_or_Array:
         else:
             raise ValueError(f"Invalid transform: {transform}")
     else:
-        print(f"Assuming translation and scaling both have ndim=3 in {transform.shape[-1]=}")
+        log.info(f"Assuming translation and scaling both have ndim=3 in {transform.shape[-1]=}")
         transl, rotation, scaling = transform[..., :3], transform[..., 3:-3], transform[..., -3:]
 
     module = torch if isinstance(rotation, torch.Tensor) else np
@@ -1227,4 +1231,4 @@ if __name__ == "__main__":
     pts1 = norm_pt.transform_points(pts)
     norm_pt3d = get_normalize_transform(pts, keep_ratio=keep_ratio)
     pts2 = norm_pt3d.transform_points(pts)
-    print(torch.allclose(pts1, pts2))
+    log.info("%s", torch.allclose(pts1, pts2))

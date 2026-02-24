@@ -5,7 +5,9 @@ This module is imported directly when bpy is available as a Python module.
 
 import os
 import json
+import logging
 
+log = logging.getLogger("unirig")
 
 def export_posed_fbx(input_fbx: str, output_fbx: str, bone_transforms: dict) -> bool:
     """
@@ -25,9 +27,9 @@ def export_posed_fbx(input_fbx: str, output_fbx: str, bone_transforms: dict) -> 
     import bpy
     from mathutils import Vector, Quaternion
 
-    print(f"[DirectPosedFBX] Input FBX: {input_fbx}")
-    print(f"[DirectPosedFBX] Output FBX: {output_fbx}")
-    print(f"[DirectPosedFBX] Transforms for {len(bone_transforms)} bones")
+    log.info("Input FBX: %s", input_fbx)
+    log.info("Output FBX: %s", output_fbx)
+    log.info(f"Transforms for {len(bone_transforms)} bones")
 
     # Clean default scene
     def clean_bpy():
@@ -45,13 +47,13 @@ def export_posed_fbx(input_fbx: str, output_fbx: str, bone_transforms: dict) -> 
     clean_bpy()
 
     # Import FBX
-    print(f"[DirectPosedFBX] Importing FBX...")
+    log.info("Importing FBX...")
     bpy.ops.import_scene.fbx(filepath=input_fbx)
-    print(f"[DirectPosedFBX] [OK] FBX imported successfully")
+    log.info("[OK] FBX imported successfully")
 
     # Recreate materials from scratch to match original export encoding
     # This prevents transparency issues where Three.js interprets re-exported materials differently
-    print(f"[DirectPosedFBX] Recreating materials from scratch...")
+    log.info("Recreating materials from scratch...")
 
     # Extract texture data from imported materials before deleting them
     texture_images = {}
@@ -68,13 +70,13 @@ def export_posed_fbx(input_fbx: str, output_fbx: str, bone_transforms: dict) -> 
                     for node in mat.node_tree.nodes:
                         if node.type == 'TEX_IMAGE' and node.image:
                             texture_images[slot_idx] = node.image
-                            print(f"[DirectPosedFBX] Found texture: {node.image.name} ({node.image.size[0]}x{node.image.size[1]})")
+                            log.info(f"Found texture: {node.image.name} ({node.image.size[0]}x{node.image.size[1]})")
                             break
 
     # Delete all imported materials
     for mat in list(bpy.data.materials):
         bpy.data.materials.remove(mat)
-    print(f"[DirectPosedFBX] Deleted imported materials")
+    log.info("Deleted imported materials")
 
     # Recreate materials from scratch for each mesh object
     for obj in bpy.data.objects:
@@ -122,9 +124,9 @@ def export_posed_fbx(input_fbx: str, output_fbx: str, bone_transforms: dict) -> 
                 # Assign material to mesh
                 obj.data.materials.append(mat)
 
-                print(f"[DirectPosedFBX] [OK] Recreated material: {mat_name}")
+                log.info("[OK] Recreated material: %s", mat_name)
 
-    print(f"[DirectPosedFBX] [OK] Recreated {len(texture_images)} materials from scratch")
+    log.info(f"[OK] Recreated {len(texture_images)} materials from scratch")
 
     # Find armature object
     armature_obj = None
@@ -136,8 +138,8 @@ def export_posed_fbx(input_fbx: str, output_fbx: str, bone_transforms: dict) -> 
     if armature_obj is None:
         raise RuntimeError("No armature found in FBX file")
 
-    print(f"[DirectPosedFBX] Found armature: {armature_obj.name}")
-    print(f"[DirectPosedFBX] Bones: {len(armature_obj.pose.bones)}")
+    log.info("Found armature: %s", armature_obj.name)
+    log.info(f"Bones: {len(armature_obj.pose.bones)}")
 
     # Apply bone transforms in pose mode
     # Set active object
@@ -169,15 +171,15 @@ def export_posed_fbx(input_fbx: str, output_fbx: str, bone_transforms: dict) -> 
 
             applied_count += 1
         else:
-            print(f"[DirectPosedFBX] Warning: Bone '{bone_name}' not found in armature")
+            log.warning("Warning: Bone '%s' not found in armature", bone_name)
 
-    print(f"[DirectPosedFBX] [OK] Applied transforms to {applied_count}/{len(bone_transforms)} bones")
+    log.info(f"[OK] Applied transforms to {applied_count}/{len(bone_transforms)} bones")
 
     # Return to object mode
     bpy.ops.object.mode_set(mode='OBJECT')
 
     # Export to FBX
-    print("[DirectPosedFBX] Exporting to FBX...")
+    log.info("Exporting to FBX...")
     os.makedirs(os.path.dirname(output_fbx) if os.path.dirname(output_fbx) else '.', exist_ok=True)
 
     bpy.ops.export_scene.fbx(
@@ -188,7 +190,7 @@ def export_posed_fbx(input_fbx: str, output_fbx: str, bone_transforms: dict) -> 
         embed_textures=True,
     )
 
-    print(f"[DirectPosedFBX] [OK] Saved to: {output_fbx}")
-    print("[DirectPosedFBX] Done!")
+    log.info("[OK] Saved to: %s", output_fbx)
+    log.info("Done!")
 
     return True

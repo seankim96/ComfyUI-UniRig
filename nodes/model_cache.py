@@ -5,6 +5,7 @@ Keeps ML models loaded in GPU memory for fast inference.
 No separate server process needed - models live in the main ComfyUI process.
 """
 
+import logging
 import os
 import sys
 import inspect
@@ -14,23 +15,23 @@ import lightning as L
 import yaml
 from box import Box
 import numpy as np
-from safetensors.torch import load_file as load_safetensors
+import comfy.utils
+import comfy.model_management
 
-# Add UniRig to path
-LIB_DIR = Path(__file__).parent.resolve()
-UNIRIG_PATH = LIB_DIR / "unirig"
-if str(UNIRIG_PATH) not in sys.path:
-    sys.path.insert(0, str(UNIRIG_PATH))
+log = logging.getLogger("unirig")
 
-from src.inference.download import download
-from src.data.extract import get_files
-from src.data.dataset import UniRigDatasetModule, DatasetConfig
-from src.data.datapath import Datapath
-from src.data.transform import TransformConfig
-from src.tokenizer.spec import TokenizerConfig
-from src.tokenizer.parse import get_tokenizer
-from src.model.parse import get_model
-from src.system.parse import get_system, get_writer
+# Path to vendored unirig (needed for os.chdir in inference)
+UNIRIG_PATH = Path(__file__).parent.resolve() / "unirig"
+
+from .unirig.src.inference.download import download
+from .unirig.src.data.extract import get_files
+from .unirig.src.data.dataset import UniRigDatasetModule, DatasetConfig
+from .unirig.src.data.datapath import Datapath
+from .unirig.src.data.transform import TransformConfig
+from .unirig.src.tokenizer.spec import TokenizerConfig
+from .unirig.src.tokenizer.parse import get_tokenizer
+from .unirig.src.model.parse import get_model
+from .unirig.src.system.parse import get_system, get_writer
 
 # Global model cache - keeps models in GPU memory
 _LOADED_MODELS = {}
@@ -59,10 +60,10 @@ def load_model_into_memory(model_type: str, task_config_path: str, cache_to_gpu:
     cache_key = f"{model_type}_{task_config_path}"
 
     if cache_key in _LOADED_MODELS:
-        print(f"[UniRigCache] Model {model_type} already loaded")
+        log.info("Model %s already loaded", model_type)
         return cache_key
 
-    print(f"[UniRigCache] Loading {model_type} model...")
+    log.info("Loading %s model...", model_type)
 
     # Change to UniRig directory for relative paths
     original_cwd = os.getcwd()
@@ -77,60 +78,54 @@ def load_model_into_memory(model_type: str, task_config_path: str, cache_to_gpu:
             tokenizer_config = load_yaml_config(os.path.join(str(UNIRIG_PATH), 'configs/tokenizer', task.components.tokenizer))
             tokenizer_config = TokenizerConfig.parse(config=tokenizer_config)
 
-        # Load model config
-        model_config_name = task.components.get('model', None)
-        if model_config_name is not None:
-            model_config = load_yaml_config(os.path.join(str(UNIRIG_PATH), 'configs/model', model_config_name))
-            if tokenizer_config is not None:
-                tokenizer = get_tokenizer(config=tokenizer_config)
+        # Build model + system on meta device (zero memory, no random init)
+        with torch.device("meta"):
+            # Load model config
+            model_config_name = task.components.get('model', None)
+            if model_config_name is not None:
+                model_config = load_yaml_config(os.path.join(str(UNIRIG_PATH), 'configs/model', model_config_name))
+                if tokenizer_config is not None:
+                    tokenizer = get_tokenizer(config=tokenizer_config)
+                else:
+                    tokenizer = None
+                model = get_model(tokenizer=tokenizer, **model_config)
             else:
-                tokenizer = None
-            model = get_model(tokenizer=tokenizer, **model_config)
-        else:
-            model = None
+                model = None
 
         # Load checkpoint
         resume_from_checkpoint = task.get('resume_from_checkpoint', None)
         checkpoint_path = download(resume_from_checkpoint)
 
-        # Load system
-        system_config_name = task.components.get('system', None)
-        if system_config_name is not None:
-            system_config = load_yaml_config(os.path.join(str(UNIRIG_PATH), 'configs/system', system_config_name))
-            system = get_system(
-                **system_config,
-                model=model,
-                optimizer_config=None,
-                loss_config=None,
-                scheduler_config=None,
-                steps_per_epoch=1,
-            )
-        else:
-            system = None
+        # Build system on meta device
+        with torch.device("meta"):
+            system_config_name = task.components.get('system', None)
+            if system_config_name is not None:
+                system_config = load_yaml_config(os.path.join(str(UNIRIG_PATH), 'configs/system', system_config_name))
+                system = get_system(
+                    **system_config,
+                    model=model,
+                    optimizer_config=None,
+                    loss_config=None,
+                    scheduler_config=None,
+                    steps_per_epoch=1,
+                )
+            else:
+                system = None
 
-        # Load checkpoint weights into system
+        # Load checkpoint weights into system (assign=True for meta device)
         if checkpoint_path and system is not None:
-            print(f"[UniRigCache] Loading checkpoint weights...")
+            log.info("Loading checkpoint weights...")
 
-            # Use safetensors loader for .safetensors files
-            if checkpoint_path.endswith('.safetensors'):
-                print(f"[UniRigCache] Loading safetensors checkpoint: {checkpoint_path}")
-                state_dict = load_safetensors(checkpoint_path, device='cpu')
-                system.load_state_dict(state_dict, strict=False)
-            else:
-                # PyTorch 2.6+ changed default to weights_only=True
-                torch_version = tuple(map(int, torch.__version__.split('.')[:2]))
-                if torch_version >= (2, 6):
-                    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
-                else:
-                    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-                system.load_state_dict(checkpoint['state_dict'], strict=False)
+            log.info("Loading checkpoint: %s", checkpoint_path)
+            state_dict = comfy.utils.load_torch_file(str(checkpoint_path))
+            system.load_state_dict(state_dict, strict=False, assign=True)
 
-            if cache_to_gpu and torch.cuda.is_available():
-                system = system.cuda()
-                print(f"[UniRigCache] Model moved to GPU")
+            device = comfy.model_management.get_torch_device()
+            if cache_to_gpu:
+                system = system.to(device)
+                log.info("Model moved to %s", device)
             else:
-                print(f"[UniRigCache] Model on CPU")
+                log.info("Model on CPU")
 
             system.eval()
 
@@ -144,7 +139,7 @@ def load_model_into_memory(model_type: str, task_config_path: str, cache_to_gpu:
             "cache_to_gpu": cache_to_gpu,
         }
 
-        print(f"[UniRigCache] Model {model_type} loaded and cached")
+        log.info("Model %s loaded and cached", model_type)
         return cache_key
 
     finally:
@@ -255,7 +250,7 @@ def run_inference(cache_key: str, request_data: dict) -> dict:
 
         # Apply config overrides to transform config
         if config_overrides:
-            print(f"[UniRigCache] Applying config overrides: {config_overrides}")
+            log.info("Applying config overrides: %s", config_overrides)
             transform_config = apply_config_overrides(transform_config, config_overrides)
 
         # Get data name
@@ -306,9 +301,10 @@ def run_inference(cache_key: str, request_data: dict) -> dict:
         # Ensure model stays on GPU before inference
         if system is not None and cached.get("cache_to_gpu", True):
             current_device = next(system.parameters()).device
-            if current_device.type == 'cpu' and torch.cuda.is_available():
-                system.cuda()
-                print(f"[UniRigCache] Model moved back to GPU")
+            target_device = comfy.model_management.get_torch_device()
+            if current_device.type == 'cpu' and target_device.type != 'cpu':
+                system.to(target_device)
+                log.info("Model moved back to %s", target_device)
 
         # Ensure model is in eval mode
         if system is not None:
@@ -322,7 +318,8 @@ def run_inference(cache_key: str, request_data: dict) -> dict:
 
         # Create trainer
         trainer_config = task.get('trainer', {})
-        if cached.get("cache_to_gpu", True) and torch.cuda.is_available():
+        target_device = comfy.model_management.get_torch_device()
+        if cached.get("cache_to_gpu", True) and target_device.type != 'cpu':
             trainer_config['accelerator'] = 'gpu'
             trainer_config['devices'] = 1
 
@@ -347,9 +344,10 @@ def run_inference(cache_key: str, request_data: dict) -> dict:
                             return_predictions=False)
 
         # Keep model on GPU after prediction
-        if system is not None and cached.get("cache_to_gpu", True) and torch.cuda.is_available():
+        target_device = comfy.model_management.get_torch_device()
+        if system is not None and cached.get("cache_to_gpu", True) and target_device.type != 'cpu':
             if next(system.parameters()).device.type == 'cpu':
-                system.cuda()
+                system.to(target_device)
 
         return {"success": True, "output": output_file}
 
@@ -368,8 +366,8 @@ def unload_model(cache_key: str):
         if cached.get("system") is not None:
             cached["system"].cpu()
         del _LOADED_MODELS[cache_key]
-        torch.cuda.empty_cache()
-        print(f"[UniRigCache] Model {cache_key} unloaded")
+        comfy.model_management.soft_empty_cache()
+        log.info("Model %s unloaded", cache_key)
         return True
     return False
 
@@ -388,4 +386,4 @@ def clear_cache():
     """Clear all cached models."""
     for key in list(_LOADED_MODELS.keys()):
         unload_model(key)
-    print("[UniRigCache] All models unloaded")
+    log.info("All models unloaded")

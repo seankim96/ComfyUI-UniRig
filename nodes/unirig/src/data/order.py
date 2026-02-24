@@ -5,7 +5,9 @@ import yaml
 from box import Box
 
 from .spec import ConfigSpec
+import logging
 
+log = logging.getLogger("unirig")
 @dataclass
 class OrderConfig(ConfigSpec):
     '''
@@ -70,23 +72,23 @@ class Order():
         # Auto-infer parts from cls when parts list is empty
         # This handles cases where the model doesn't generate part tokens
         if len(parts) == 0 and cls is not None and cls in self.parts_order:
-            print(f"[Order] Auto-inferring parts for cls='{cls}' (parts list was empty)")
+            log.info("Auto-inferring parts for cls='%s' (parts list was empty)", cls)
             parts = list(self.parts_order[cls])
-            print(f"[Order] Inferred parts: {parts}")
+            log.info("Inferred parts: %s", parts)
 
         for part in parts:
             if part is None: # spring
                 continue
             if cls in self.parts and part in self.parts[cls]:
                 part_names = self.parts[cls][part]
-                print(f"[Order] Found {len(part_names)} bone names for cls='{cls}', part='{part}'")
+                log.info(f"Found {len(part_names)} bone names for cls='{cls}', part='{part}'")
                 names.extend(part_names)
             else:
-                print(f"[Order] WARNING: cls='{cls}' or part='{part}' not found in self.parts")
+                log.warning("WARNING: cls='%s' or part='%s' not found in self.parts", cls, part)
 
-        print(f"[Order] Total named bones: {len(names)}, num_bones: {num_bones}")
+        log.info(f"Total named bones: {len(names)}, num_bones: {num_bones}")
         if len(names) < num_bones:
-            print(f"[Order] Filling {num_bones - len(names)} extra bones with generic names")
+            log.info(f"Filling {num_bones - len(names)} extra bones with generic names")
         assert len(names) <= num_bones, f"Expected {len(names)} bones for cls='{cls}', got {num_bones} bones"
         for i in range(len(names), num_bones):
             names.append(f"bone_{i}")

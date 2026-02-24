@@ -26,12 +26,14 @@ from src.system.parse import get_system, get_writer
 from tqdm import tqdm
 import time
 import json
+import logging
 
+log = logging.getLogger("unirig")
 def load(task: str, path: str) -> Box:
     if path.endswith('.yaml'):
         path = path.removesuffix('.yaml')
     path += '.yaml'
-    print(f"\033[92mload {task} config: {path}\033[0m")
+    log.info("load %s config: %s", task, path)
     return Box(yaml.safe_load(open(path, 'r')))
 
 def apply_config_overrides(config, overrides: dict):
@@ -127,7 +129,7 @@ if __name__ == "__main__":
         )
         files = [f[1] for f in files]
         if len(files) > 1 and args.output is not None:
-            print("\033[92mwarning: output is specified, but multiple files are detected. Output will be written.\033[0m")
+            log.warning("warning: output is specified, but multiple files are detected. Output will be written.")
         datapath = Datapath(files=files, cls=args.cls)
     else:
         datapath = None
@@ -140,10 +142,10 @@ if __name__ == "__main__":
     if config_overrides_json:
         try:
             config_overrides = json.loads(config_overrides_json)
-            print(f"\033[92mApplying config overrides: {config_overrides}\033[0m")
+            log.info("Applying config overrides: %s", config_overrides)
             transform_config = apply_config_overrides(transform_config, config_overrides)
         except json.JSONDecodeError as e:
-            print(f"\033[91mWarning: Failed to parse config overrides: {e}\033[0m")
+            log.warning("Warning: Failed to parse config overrides: %s", e)
 
     # get tokenizer
     tokenizer_config = task.components.get('tokenizer', None)
@@ -284,12 +286,12 @@ if __name__ == "__main__":
             **wandb_config
         )
         if logger.experiment.id is not None:
-            print(f"\033[92mWandbLogger started: {logger.experiment.id}\033[0m")
+            log.info("WandbLogger started: %s", logger.experiment.id)
             # Get the run URL using wandb.run.get_url() which is more reliable
             run_url = logger.experiment.get_url() if hasattr(logger.experiment, 'get_url') else logger.experiment.url
-            print(f"\033[92mWandbLogger url: {run_url}\033[0m")
+            log.info("WandbLogger url: %s", run_url)
         else:
-            print("\033[91mWandbLogger failed to start\033[0m")
+            log.info("WandbLogger failed to start")
     else:
         logger = None
 
@@ -333,7 +335,7 @@ if __name__ == "__main__":
             except RuntimeError as e:
                 # Handle skin model key structure difference (.attention.X -> .attention.attn.X)
                 if 'attention.attn.Wq' in str(e):
-                    print("[UniRig] Remapping attention keys for compatibility...")
+                    log.info("Remapping attention keys for compatibility...")
                     remapped_dict = {}
                     for k, v in cleaned_state_dict.items():
                         # Remap .attention.Wq/Wkv/out_proj -> .attention.attn.Wq/Wkv/out_proj

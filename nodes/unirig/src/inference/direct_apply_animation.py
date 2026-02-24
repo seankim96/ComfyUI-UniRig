@@ -10,9 +10,12 @@ IMPORTANT: bpy and mathutils are imported lazily inside functions to avoid
 conflicts with torch_cluster. Do NOT add module-level bpy imports.
 """
 
+import logging
 import os
 import io
 import tempfile
+
+log = logging.getLogger("unirig")
 
 try:
     from PIL import Image
@@ -37,18 +40,18 @@ def apply_mixamo_animation(model_fbx: str, animation_fbx: str, output_fbx: str) 
     import bpy
     from mathutils import Matrix, Vector, Quaternion
 
-    print(f"[Direct Apply Animation] Model FBX: {model_fbx}")
-    print(f"[Direct Apply Animation] Animation FBX: {animation_fbx}")
-    print(f"[Direct Apply Animation] Output FBX: {output_fbx}")
+    log.info(f"Model FBX: {model_fbx}")
+    log.info(f"Animation FBX: {animation_fbx}")
+    log.info(f"Output FBX: {output_fbx}")
 
     # Clean the scene
     _clean_scene()
 
     # Step 1: Import the rigged model FIRST
-    print(f"[Direct Apply Animation] Importing model...")
+    log.info(f"Importing model...")
     try:
         bpy.ops.import_scene.fbx(filepath=model_fbx)
-        print(f"[Direct Apply Animation] Model imported successfully")
+        log.info(f"Model imported successfully")
     except Exception as e:
         raise RuntimeError(f"Failed to import model: {e}")
 
@@ -65,12 +68,12 @@ def apply_mixamo_animation(model_fbx: str, animation_fbx: str, output_fbx: str) 
         raise RuntimeError("No armature found in model FBX")
 
     model_bone_names = set(bone.name for bone in model_armature.pose.bones)
-    print(f"[Direct Apply Animation] Found model armature: {model_armature.name} with {len(model_bone_names)} bones")
-    print(f"[Direct Apply Animation] Found {len(model_meshes)} mesh object(s)")
+    log.info(f"Found model armature: {model_armature.name} with {len(model_bone_names)} bones")
+    log.info(f"Found {len(model_meshes)} mesh object(s)")
 
     # Check model bones for mixamo prefix
     model_mixamo_count, model_total = _check_mixamo_prefix(model_bone_names)
-    print(f"[Direct Apply Animation] Model has {model_mixamo_count}/{model_total} bones with mixamorig: prefix")
+    log.info(f"Model has {model_mixamo_count}/{model_total} bones with mixamorig: prefix")
 
     if model_mixamo_count == 0:
         raise RuntimeError(
@@ -83,10 +86,10 @@ def apply_mixamo_animation(model_fbx: str, animation_fbx: str, output_fbx: str) 
     existing_objects = set(bpy.data.objects[:])
 
     # Step 2: Import the animation FBX
-    print(f"[Direct Apply Animation] Importing animation...")
+    log.info(f"Importing animation...")
     try:
         bpy.ops.import_scene.fbx(filepath=animation_fbx)
-        print(f"[Direct Apply Animation] Animation imported successfully")
+        log.info(f"Animation imported successfully")
     except Exception as e:
         raise RuntimeError(f"Failed to import animation: {e}")
 
@@ -104,12 +107,12 @@ def apply_mixamo_animation(model_fbx: str, animation_fbx: str, output_fbx: str) 
         raise RuntimeError("No armature found in animation FBX")
 
     anim_bone_names = set(bone.name for bone in anim_armature.pose.bones)
-    print(f"[Direct Apply Animation] Found animation armature: {anim_armature.name} with {len(anim_bone_names)} bones")
-    print(f"[Direct Apply Animation] Animation armature scale: {anim_armature.scale[:]}")
+    log.info(f"Found animation armature: {anim_armature.name} with {len(anim_bone_names)} bones")
+    log.info(f"Animation armature scale: {anim_armature.scale[:]}")
 
     # Check animation bones for mixamo prefix
     anim_mixamo_count, anim_total = _check_mixamo_prefix(anim_bone_names)
-    print(f"[Direct Apply Animation] Animation has {anim_mixamo_count}/{anim_total} bones with mixamorig: prefix")
+    log.info(f"Animation has {anim_mixamo_count}/{anim_total} bones with mixamorig: prefix")
 
     if anim_mixamo_count == 0:
         raise RuntimeError(
@@ -122,14 +125,14 @@ def apply_mixamo_animation(model_fbx: str, animation_fbx: str, output_fbx: str) 
     anim_action = None
     if anim_armature.animation_data and anim_armature.animation_data.action:
         anim_action = anim_armature.animation_data.action
-        print(f"[Direct Apply Animation] Found animation action: {anim_action.name}")
-        print(f"[Direct Apply Animation] Frame range: {anim_action.frame_range[0]} - {anim_action.frame_range[1]}")
+        log.info(f"Found animation action: {anim_action.name}")
+        log.info(f"Frame range: {anim_action.frame_range[0]} - {anim_action.frame_range[1]}")
     else:
         for action in bpy.data.actions:
             if action.users > 0 or anim_action is None:
                 anim_action = action
         if anim_action:
-            print(f"[Direct Apply Animation] Using action from data: {anim_action.name}")
+            log.info(f"Using action from data: {anim_action.name}")
         else:
             raise RuntimeError("No animation action found")
 
@@ -142,7 +145,7 @@ def apply_mixamo_animation(model_fbx: str, animation_fbx: str, output_fbx: str) 
 
     # Find matching bones
     matching_bones = model_bone_names.intersection(anim_bone_names)
-    print(f"[Direct Apply Animation] Matching bones: {len(matching_bones)} of {len(model_bone_names)} model bones")
+    log.info(f"Matching bones: {len(matching_bones)} of {len(model_bone_names)} model bones")
 
     if len(matching_bones) == 0:
         raise RuntimeError("No matching bone names found!")
@@ -156,8 +159,8 @@ def apply_mixamo_animation(model_fbx: str, animation_fbx: str, output_fbx: str) 
     else:
         _apply_partial_copy(model_armature, anim_armature, anim_action, matching_bones, model_meshes, output_fbx)
 
-    print(f"[Direct Apply Animation] Saved to: {output_fbx}")
-    print("[Direct Apply Animation] Done!")
+    log.info(f"Saved to: {output_fbx}")
+    log.info("Done!")
 
     return output_fbx
 
@@ -190,7 +193,7 @@ def _apply_direct_copy(model_armature, anim_armature, anim_action, model_meshes,
     """Apply animation using direct action copy (identical skeletons)."""
     import bpy  # Lazy import
 
-    print(f"[Direct Apply Animation] Using DIRECT action copy (identical skeletons)...")
+    log.info(f"Using DIRECT action copy (identical skeletons)...")
 
     # Ensure model has animation data
     if not model_armature.animation_data:
@@ -207,7 +210,7 @@ def _apply_direct_copy(model_armature, anim_armature, anim_action, model_meshes,
 
     if abs(anim_scale - model_scale) > 0.0001:
         scale_factor = anim_scale / model_scale
-        print(f"[Direct Apply Animation] Scaling location keyframes by {scale_factor:.4f}x")
+        log.info(f"Scaling location keyframes by {scale_factor:.4f}x")
         for fc in new_action.fcurves:
             if '.location' in fc.data_path:
                 for kfp in fc.keyframe_points:
@@ -215,7 +218,7 @@ def _apply_direct_copy(model_armature, anim_armature, anim_action, model_meshes,
                     kfp.handle_left[1] *= scale_factor
                     kfp.handle_right[1] *= scale_factor
 
-    print(f"[Direct Apply Animation] Direct copy complete - {len(new_action.fcurves)} F-curves")
+    log.info(f"Direct copy complete - {len(new_action.fcurves)} F-curves")
 
     # Cleanup
     bpy.data.objects.remove(anim_armature, do_unlink=True)
@@ -228,7 +231,7 @@ def _apply_partial_copy(model_armature, anim_armature, anim_action, matching_bon
     """Apply animation using partial F-curve copy (different skeleton structures)."""
     import bpy  # Lazy import
 
-    print(f"[Direct Apply Animation] Using PARTIAL action copy ({len(matching_bones)} matching bones)...")
+    log.info(f"Using PARTIAL action copy ({len(matching_bones)} matching bones)...")
 
     # Ensure model has animation data
     if not model_armature.animation_data:
@@ -270,7 +273,7 @@ def _apply_partial_copy(model_armature, anim_armature, anim_action, matching_bon
 
                 copied_fcurves += 1
 
-    print(f"[Direct Apply Animation] Copied {copied_fcurves} F-curves for matching bones")
+    log.info(f"Copied {copied_fcurves} F-curves for matching bones")
 
     # Cleanup
     bpy.data.objects.remove(anim_armature, do_unlink=True)
@@ -283,7 +286,7 @@ def _export_fbx(model_armature, model_meshes, output_fbx):
     """Export the animated model to FBX."""
     import bpy  # Lazy import
 
-    print(f"[Direct Apply Animation] Exporting animated FBX...")
+    log.info(f"Exporting animated FBX...")
     os.makedirs(os.path.dirname(output_fbx) if os.path.dirname(output_fbx) else '.', exist_ok=True)
 
     # Fix material transparency - FBX embeds PNGs with alpha, causing transparency on reimport.
@@ -320,11 +323,11 @@ def _export_fbx(model_armature, model_meshes, output_fbx):
                     new_img.name = old_name
 
                     os.remove(tmp_path)
-                    print(f"[Direct Apply Animation] Converted to RGB JPEG: {old_name}")
+                    log.info(f"Converted to RGB JPEG: {old_name}")
                 except Exception as e:
-                    print(f"[Direct Apply Animation] Warning: Could not convert {img.name}: {e}")
+                    log.warning(f"Could not convert {img.name}: {e}")
     else:
-        print("[Direct Apply Animation] Warning: PIL not available, skipping image alpha fix")
+        log.warning("PIL not available, skipping image alpha fix")
 
     for mat in bpy.data.materials:
         if mat:
@@ -343,7 +346,7 @@ def _export_fbx(model_armature, model_meshes, output_fbx):
                         # If only connected to Alpha on a BSDF, remove it
                         if outputs_used == {('BSDF_PRINCIPLED', 'Alpha')}:
                             nodes_to_remove.append(node)
-                            print(f"[Direct Apply Animation] Removing alpha-only texture: {node.name}")
+                            log.info(f"Removing alpha-only texture: {node.name}")
 
                 for node in nodes_to_remove:
                     mat.node_tree.nodes.remove(node)
@@ -358,7 +361,7 @@ def _export_fbx(model_armature, model_meshes, output_fbx):
                         if 'Alpha' in node.inputs:
                             node.inputs['Alpha'].default_value = 1.0
 
-                print(f"[Direct Apply Animation] Fixed material: {mat.name} -> OPAQUE")
+                log.info(f"Fixed material: {mat.name} -> OPAQUE")
 
     bpy.ops.object.select_all(action='DESELECT')
     model_armature.select_set(True)

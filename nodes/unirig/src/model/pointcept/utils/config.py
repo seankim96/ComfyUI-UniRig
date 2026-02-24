@@ -18,7 +18,9 @@ from yapf.yapflib.yapf_api import FormatCode
 
 from .misc import import_modules_from_strings
 from .path import check_file_exist
+import logging
 
+log = logging.getLogger("unirig")
 if platform.system() == "Windows":
     import regex as re
 else:
@@ -63,7 +65,7 @@ def add_args(parser, cfg, prefix=""):
         elif isinstance(v, abc.Iterable):
             parser.add_argument("--" + prefix + k, type=type(v[0]), nargs="+")
         else:
-            print(f"cannot parse key {prefix + k} of type {type(v)}")
+            log.info(f"cannot parse key {prefix + k} of type {type(v)}")
     return parser
 
 

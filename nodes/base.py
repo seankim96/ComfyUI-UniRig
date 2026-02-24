@@ -4,8 +4,8 @@ Base setup and shared utilities for UniRig nodes.
 Handles path configuration, Blender setup, and HuggingFace cache management.
 """
 
+import logging
 import os
-import sys
 from pathlib import Path
 import numpy as np
 import base64
@@ -13,22 +13,21 @@ from io import BytesIO
 
 import folder_paths
 
+log = logging.getLogger("unirig")
+
 # Try to import PIL for texture handling
 try:
     from PIL import Image as PILImage
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
-    print("[UniRig] Warning: PIL not available, texture preview will be limited")
+    log.warning("PIL not available, texture preview will be limited")
 
 
 # Get paths relative to this file
 NODE_DIR = Path(__file__).parent.parent.absolute()  # Go up from nodes/ to ComfyUI-UniRig/
 NODES_DIR = Path(__file__).parent.absolute()  # nodes/ directory itself
 UNIRIG_PATH = str(NODES_DIR / "unirig")
-# Blender scripts are now in nodes/ directly (flat structure)
-BLENDER_PARSE_SKELETON = str(NODES_DIR / "blender_parse_skeleton.py")
-BLENDER_EXTRACT_MESH_INFO = str(NODES_DIR / "blender_extract_mesh_info.py")
 # Keep LIB_DIR for backwards compatibility
 LIB_DIR = NODES_DIR
 
@@ -38,13 +37,9 @@ UNIRIG_MODELS_DIR = Path(folder_paths.models_dir) / "unirig"
 UNIRIG_MODELS_DIR.mkdir(parents=True, exist_ok=True)
 os.environ['UNIRIG_MODELS_DIR'] = str(UNIRIG_MODELS_DIR)
 
-print(f"[UniRig] Models directory: {UNIRIG_MODELS_DIR}")
+log.info("Models directory: %s", UNIRIG_MODELS_DIR)
 
 import shutil
-
-# Add local UniRig to path
-if UNIRIG_PATH not in sys.path:
-    sys.path.insert(0, UNIRIG_PATH)
 
 
 def decode_texture_to_comfy_image(texture_data_base64: str):
@@ -82,7 +77,7 @@ def decode_texture_to_comfy_image(texture_data_base64: str):
         return img_tensor, pil_image.width, pil_image.height
 
     except Exception as e:
-        print(f"[UniRig] Error decoding texture: {e}")
+        log.error("Error decoding texture: %s", e)
         return None, 0, 0
 
 
@@ -115,7 +110,7 @@ def create_placeholder_texture(width: int = 256, height: int = 256, text: str = 
         return img_tensor
 
     except Exception as e:
-        print(f"[UniRig] Error creating placeholder: {e}")
+        log.error("Error creating placeholder: %s", e)
         # Return minimal gray image
         return torch.full((1, 64, 64, 3), 0.3)
 

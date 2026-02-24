@@ -1,8 +1,11 @@
 import sys
+import logging
 
-print("[unirig] loading...", file=sys.stderr, flush=True)
+log = logging.getLogger("unirig")
+
+log.info("loading...")
 from comfy_env import register_nodes
-print("[unirig] calling register_nodes", file=sys.stderr, flush=True)
+log.info("calling register_nodes")
 NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS = register_nodes()
 
 WEB_DIRECTORY = "./web"

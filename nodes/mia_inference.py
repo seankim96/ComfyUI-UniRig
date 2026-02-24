@@ -10,10 +10,12 @@ its bundled libraries. This avoids a segfault caused by library conflicts.
 """
 
 import os
-import sys
 from pathlib import Path
 from typing import Dict, Any, Optional, TYPE_CHECKING
+import logging
+import comfy.model_management
 
+log = logging.getLogger("unirig")
 # Type hints only - not imported at runtime
 if TYPE_CHECKING:
     import numpy as np
@@ -38,7 +40,6 @@ def _check_bpy_available() -> bool:
 # Get paths relative to this file
 UTILS_DIR = Path(__file__).parent.absolute()
 NODE_DIR = UTILS_DIR.parent
-LIB_DIR = UTILS_DIR  # mia/ is in nodes_gpu/ (same directory as this file)
 
 # MIA models directory: ComfyUI/models/mia/
 # Supports override via MIA_MODELS_PATH environment variable
@@ -80,7 +81,7 @@ def ensure_mia_models() -> bool:
     if not missing:
         return True
 
-    print(f"[MIA] Downloading missing models: {missing}")
+    log.info("Downloading missing models: %s", missing)
 
     try:
         from huggingface_hub import hf_hub_download
@@ -89,7 +90,7 @@ def ensure_mia_models() -> bool:
         MIA_MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
         for model_file in missing:
-            print(f"[MIA] Downloading {model_file}...")
+            log.info("Downloading %s...", model_file)
             target_path = MIA_MODELS_DIR / model_file
             with tempfile.TemporaryDirectory(dir=str(MIA_MODELS_DIR)) as tmp_dir:
                 hf_hub_download(
@@ -101,11 +102,11 @@ def ensure_mia_models() -> bool:
                 downloaded = Path(tmp_dir) / "output" / "best" / "new" / model_file
                 downloaded.rename(target_path)
 
-        print(f"[MIA] All models downloaded to {MIA_MODELS_DIR}")
+        log.info("All models downloaded to %s", MIA_MODELS_DIR)
         return True
 
     except Exception as e:
-        print(f"[MIA] Error downloading models: {e}")
+        log.error("Error downloading models: %s", e)
         return False
 
 
@@ -126,20 +127,18 @@ def load_mia_models(cache_to_gpu: bool = True) -> str:
     cache_key = f"mia_models_gpu={cache_to_gpu}"
 
     if cache_key in _MIA_MODEL_CACHE:
-        print(f"[MIA] Using cached models")
+        log.info("Using cached models")
         return cache_key  # Return key, not models
 
     # Ensure models are downloaded
     if not ensure_mia_models():
         raise RuntimeError("Failed to download MIA models")
 
-    device = torch.device("cuda" if torch.cuda.is_available() and cache_to_gpu else "cpu")
-    print(f"[MIA] Loading models to {device}...")
+    device = comfy.model_management.get_torch_device() if cache_to_gpu else torch.device("cpu")
+    log.info("Loading models to %s...", device)
 
-    # Import vendored MIA modules from lib/mia (no bpy dependency)
-    if str(LIB_DIR) not in sys.path:
-        sys.path.insert(0, str(LIB_DIR))
-    from mia import PCAE, JOINTS_NUM, KINEMATIC_TREE
+    # Import vendored MIA modules
+    from .mia import PCAE, JOINTS_NUM, KINEMATIC_TREE
 
     N = 32768  # Number of points to sample
     hands_resample_ratio = 0.5
@@ -147,7 +146,7 @@ def load_mia_models(cache_to_gpu: bool = True) -> str:
     hierarchical_ratio = hands_resample_ratio + geo_resample_ratio
 
     # Load coarse joints model (for preprocessing)
-    print(f"[MIA] Loading joints_coarse model...")
+    log.info("Loading joints_coarse model...")
     model_coarse = PCAE(
         N=N,
         input_normal=False,
@@ -160,7 +159,7 @@ def load_mia_models(cache_to_gpu: bool = True) -> str:
     model_coarse.load(str(MIA_MODELS_DIR / "joints_coarse.pth")).to(device).eval()
 
     # Load blend weights model
-    print(f"[MIA] Loading bw model...")
+    log.info("Loading bw model...")
     model_bw = PCAE(
         N=N,
         input_normal=False,
@@ -171,7 +170,7 @@ def load_mia_models(cache_to_gpu: bool = True) -> str:
     model_bw.load(str(MIA_MODELS_DIR / "bw.pth")).to(device).eval()
 
     # Load blend weights with normals model
-    print(f"[MIA] Loading bw_normal model...")
+    log.info("Loading bw_normal model...")
     model_bw_normal = PCAE(
         N=N,
         input_normal=True,
@@ -182,7 +181,7 @@ def load_mia_models(cache_to_gpu: bool = True) -> str:
     model_bw_normal.load(str(MIA_MODELS_DIR / "bw_normal.pth")).to(device).eval()
 
     # Load joints model
-    print(f"[MIA] Loading joints model...")
+    log.info("Loading joints model...")
     model_joints = PCAE(
         N=N,
         input_normal=False,
@@ -198,7 +197,7 @@ def load_mia_models(cache_to_gpu: bool = True) -> str:
     model_joints.load(str(MIA_MODELS_DIR / "joints.pth")).to(device).eval()
 
     # Load pose model
-    print(f"[MIA] Loading pose model...")
+    log.info("Loading pose model...")
     model_pose = PCAE(
         N=N,
         input_normal=False,
@@ -229,7 +228,7 @@ def load_mia_models(cache_to_gpu: bool = True) -> str:
     }
 
     _MIA_MODEL_CACHE[cache_key] = models
-    print(f"[MIA] All models loaded successfully")
+    log.info("All models loaded successfully")
 
     return cache_key  # Return key, not models (models can't be pickled to host)
 
@@ -266,36 +265,34 @@ def run_mia_inference(
     import numpy as np  # Lazy import
     import folder_paths  # Lazy import
 
-    # Use vendored pipeline from lib/mia
-    if str(LIB_DIR) not in sys.path:
-        sys.path.insert(0, str(LIB_DIR))
-    from mia.pipeline import prepare_input, preprocess, infer, bw_post_process
-    from mia import BONES_IDX_DICT, KINEMATIC_TREE
+    # Use vendored MIA pipeline
+    from .mia.pipeline import prepare_input, preprocess, infer, bw_post_process
+    from .mia import BONES_IDX_DICT, KINEMATIC_TREE
 
     device = models["device"]
     N = models["N"]
 
-    print(f"[MIA] Starting inference...")
-    print(f"[MIA] Options: no_fingers={no_fingers}, use_normal={use_normal}, reset_to_rest={reset_to_rest}")
+    log.info("Starting inference...")
+    log.info("Options: no_fingers=%s, use_normal=%s, reset_to_rest=%s", no_fingers, use_normal, reset_to_rest)
 
     # Debug: Check input mesh visual before any processing
-    print(f"[MIA] Input mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
+    log.info(f"Input mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
     if hasattr(mesh, 'visual'):
-        print(f"[MIA] Input mesh visual type: {type(mesh.visual).__name__}")
+        log.info(f"Input mesh visual type: {type(mesh.visual).__name__}")
         if hasattr(mesh.visual, 'uv') and mesh.visual.uv is not None:
-            print(f"[MIA]   Has UV coords: {mesh.visual.uv.shape}")
+            log.info("Has UV coords: %s", mesh.visual.uv.shape)
         if hasattr(mesh.visual, 'material') and mesh.visual.material is not None:
             mat = mesh.visual.material
-            print(f"[MIA]   Material type: {type(mat).__name__}")
+            log.info(f"Material type: {type(mat).__name__}")
             if hasattr(mat, 'baseColorTexture') and mat.baseColorTexture is not None:
-                print(f"[MIA]   Has baseColorTexture!")
+                log.info("Has baseColorTexture!")
             if hasattr(mat, 'image') and mat.image is not None:
-                print(f"[MIA]   Has image texture!")
+                log.info("Has image texture!")
     else:
-        print(f"[MIA] WARNING: Input mesh has no visual attribute!")
+        log.warning("WARNING: Input mesh has no visual attribute!")
 
     # Prepare input
-    print(f"[MIA] Preparing input...")
+    log.info("Preparing input...")
     data = prepare_input(
         mesh,
         N=N,
@@ -306,20 +303,20 @@ def run_mia_inference(
 
     # Debug: Check data.mesh visual after prepare_input
     if hasattr(data, 'mesh') and data.mesh is not None:
-        print(f"[MIA] After prepare_input: data.mesh has {len(data.mesh.vertices)} vertices")
+        log.info(f"After prepare_input: data.mesh has {len(data.mesh.vertices)} vertices")
         if hasattr(data.mesh, 'visual'):
-            print(f"[MIA]   data.mesh visual type: {type(data.mesh.visual).__name__}")
+            log.info(f"data.mesh visual type: {type(data.mesh.visual).__name__}")
             if hasattr(data.mesh.visual, 'uv') and data.mesh.visual.uv is not None:
-                print(f"[MIA]   Has UV coords: {data.mesh.visual.uv.shape}")
+                log.info("Has UV coords: %s", data.mesh.visual.uv.shape)
             if hasattr(data.mesh.visual, 'material') and data.mesh.visual.material is not None:
-                print(f"[MIA]   Has material: {type(data.mesh.visual.material).__name__}")
+                log.info(f"Has material: {type(data.mesh.visual.material).__name__}")
         else:
-            print(f"[MIA]   WARNING: data.mesh has no visual attribute!")
+            log.warning("WARNING: data.mesh has no visual attribute!")
     else:
-        print(f"[MIA] WARNING: data.mesh is None or missing!")
+        log.warning("WARNING: data.mesh is None or missing!")
 
     # Preprocess (normalize, coarse joint localization)
-    print(f"[MIA] Preprocessing...")
+    log.info("Preprocessing...")
     data = preprocess(
         data,
         model_coarse=models["model_coarse"],
@@ -330,7 +327,7 @@ def run_mia_inference(
     )
 
     # Run main inference
-    print(f"[MIA] Running model inference...")
+    log.info("Running model inference...")
     data = infer(
         data,
         model_bw=models["model_bw"],
@@ -342,7 +339,7 @@ def run_mia_inference(
     )
 
     # Post-process blend weights
-    print(f"[MIA] Post-processing...")
+    log.info("Post-processing...")
     # Get head position for above-head mask
     joints = data.joints
     head_idx = BONES_IDX_DICT[f"mixamorig:Head"]
@@ -360,13 +357,13 @@ def run_mia_inference(
     joints_np = data.joints.squeeze(0).numpy()
 
     # Debug: check pose data availability
-    print(f"[MIA] reset_to_rest={reset_to_rest}, data.pose is None: {data.pose is None}")
+    log.info("reset_to_rest=%s, data.pose is None: %s", reset_to_rest, data.pose is None)
     if data.pose is not None:
-        print(f"[MIA] Pose shape: {data.pose.shape}")
+        log.info("Pose shape: %s", data.pose.shape)
         # Save pose to known location for debugging
         pose_debug_path = os.path.join(folder_paths.get_temp_directory(), "mia_pose_debug.npy")
         np.save(pose_debug_path, data.pose.squeeze(0).numpy())
-        print(f"[MIA] Saved pose data to {pose_debug_path}")
+        log.debug("Saved pose data to %s", pose_debug_path)
 
     output_data = {
         "mesh": data.mesh,
@@ -382,10 +379,10 @@ def run_mia_inference(
     }
 
     # Export to FBX using MIA's Blender integration
-    print(f"[MIA] Exporting to FBX...")
+    log.info("Exporting to FBX...")
     _export_mia_fbx(output_data, output_path, no_fingers, reset_to_rest)
 
-    print(f"[MIA] Inference complete: {output_path}")
+    log.info("Inference complete: %s", output_path)
     return output_path
 
 
@@ -412,20 +409,20 @@ def _export_mia_fbx_direct(
     bones_idx_dict = dict(data["bones_idx_dict"])
 
     # Debug: Check mesh visual before export
-    print(f"[MIA Export] Mesh to export: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
+    log.info(f"Mesh to export: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
     if hasattr(mesh, 'visual'):
-        print(f"[MIA Export] Mesh visual type: {type(mesh.visual).__name__}")
+        log.info(f"Mesh visual type: {type(mesh.visual).__name__}")
         if hasattr(mesh.visual, 'uv') and mesh.visual.uv is not None:
-            print(f"[MIA Export]   Has UV coords: {mesh.visual.uv.shape}")
+            log.info("Has UV coords: %s", mesh.visual.uv.shape)
         if hasattr(mesh.visual, 'material') and mesh.visual.material is not None:
             mat = mesh.visual.material
-            print(f"[MIA Export]   Material type: {type(mat).__name__}")
+            log.info(f"Material type: {type(mat).__name__}")
             if hasattr(mat, 'baseColorTexture') and mat.baseColorTexture is not None:
-                print(f"[MIA Export]   Has baseColorTexture!")
+                log.info("Has baseColorTexture!")
             if hasattr(mat, 'image') and mat.image is not None:
-                print(f"[MIA Export]   Has image texture!")
+                log.info("Has image texture!")
     else:
-        print(f"[MIA Export] WARNING: Mesh has no visual attribute!")
+        log.warning("WARNING: Mesh has no visual attribute!")
     parent_indices = data.get("parent_indices")
 
     # Restore original visual (textures/materials) before export
@@ -433,9 +430,9 @@ def _export_mia_fbx_direct(
     original_visual = data.get("original_visual")
     if original_visual is not None:
         mesh.visual = original_visual
-        print(f"[MIA Export] Restored original visual: {type(original_visual).__name__}")
+        log.info(f"Restored original visual: {type(original_visual).__name__}")
     else:
-        print(f"[MIA Export] WARNING: No original_visual to restore")
+        log.warning("WARNING: No original_visual to restore")
 
     # Export processed mesh to temp GLB for import into Blender
     temp_mesh_file = tempfile.NamedTemporaryFile(suffix=".glb", delete=False)
@@ -443,28 +440,28 @@ def _export_mia_fbx_direct(
     temp_mesh_file.close()
 
     # Debug: Check what we're exporting
-    print(f"[MIA Export] About to export mesh to: {mesh_path}")
-    print(f"[MIA Export] Mesh has visual: {hasattr(mesh, 'visual')}")
+    log.info("About to export mesh to: %s", mesh_path)
+    log.info(f"Mesh has visual: {hasattr(mesh, 'visual')}")
     if hasattr(mesh, 'visual') and mesh.visual is not None:
         visual = mesh.visual
-        print(f"[MIA Export] Visual kind: {visual.kind if hasattr(visual, 'kind') else 'unknown'}")
+        log.info(f"Visual kind: {visual.kind if hasattr(visual, 'kind') else 'unknown'}")
         if hasattr(visual, 'uv') and visual.uv is not None:
-            print(f"[MIA Export] Has UV: shape={visual.uv.shape}")
+            log.info("Has UV: shape=%s", visual.uv.shape)
         if hasattr(visual, 'material') and visual.material is not None:
             mat = visual.material
-            print(f"[MIA Export] Material: {type(mat).__name__}")
+            log.info(f"Material: {type(mat).__name__}")
             # Check for PBRMaterial attributes
             for attr in ['baseColorTexture', 'image', 'baseColorFactor']:
                 if hasattr(mat, attr):
                     val = getattr(mat, attr)
                     if val is not None:
-                        print(f"[MIA Export]   {attr}: {type(val).__name__}")
+                        log.info(f"{attr}: {type(val).__name__}")
 
     mesh.export(mesh_path)
-    print(f"[MIA Export] Exported GLB size: {os.path.getsize(mesh_path)} bytes")
+    log.info(f"Exported GLB size: {os.path.getsize(mesh_path)} bytes")
 
     try:
-        print(f"[MIA Export] Weights: {bw.shape}, Joints: {joints.shape}, Bones: {len(bones_idx_dict)}")
+        log.info(f"Weights: {bw.shape}, Joints: {joints.shape}, Bones: {len(bones_idx_dict)}")
 
         # Reset scene and load template
         bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -481,7 +478,7 @@ def _export_mia_fbx_direct(
         if armature is None:
             raise RuntimeError("No armature found in template!")
 
-        print(f"[MIA Export] Loaded template armature: {armature.name}")
+        log.info("Loaded template armature: %s", armature.name)
 
         # Capture template bone orientations (including z_axis for align_roll)
         bpy.context.view_layer.objects.active = armature
@@ -509,23 +506,23 @@ def _export_mia_fbx_direct(
 
         # Debug: Check materials after import
         for obj in input_meshes:
-            print(f"[MIA Export] Imported mesh '{obj.name}': {len(obj.data.vertices)} verts")
+            log.info(f"Imported mesh '{obj.name}': {len(obj.data.vertices)} verts")
             if obj.data.materials:
-                print(f"[MIA Export]   Has {len(obj.data.materials)} material(s)")
+                log.info(f"Has {len(obj.data.materials)} material(s)")
                 for i, mat in enumerate(obj.data.materials):
                     if mat:
-                        print(f"[MIA Export]   Material[{i}]: {mat.name}")
+                        log.info("Material[%s]: %s", i, mat.name)
                         if mat.use_nodes and mat.node_tree:
                             for node in mat.node_tree.nodes:
                                 if node.type == 'TEX_IMAGE' and node.image:
-                                    print(f"[MIA Export]     Texture: {node.image.name} ({node.image.size[0]}x{node.image.size[1]})")
+                                    log.info(f"Texture: {node.image.name} ({node.image.size[0]}x{node.image.size[1]})")
             else:
-                print(f"[MIA Export]   No materials!")
+                log.info("No materials!")
 
         if not input_meshes:
             raise RuntimeError("No mesh found in input!")
 
-        print(f"[MIA Export] Loaded {len(input_meshes)} mesh(es)")
+        log.info(f"Loaded {len(input_meshes)} mesh(es)")
 
         # Remove template meshes
         for obj in template_objs:
@@ -557,7 +554,7 @@ def _export_mia_fbx_direct(
                 if bone_name in bones_idx_dict:
                     del bones_idx_dict[bone_name]
             bpy.ops.object.mode_set(mode='OBJECT')
-            print(f"[MIA Export] Removed {len(bones_to_remove)} finger bones")
+            log.info(f"Removed {len(bones_to_remove)} finger bones")
 
         # Save armature's world matrix and get scaling factor
         matrix_world = armature.matrix_world.copy()
@@ -639,29 +636,29 @@ def _export_mia_fbx_direct(
 
         # Apply pose-to-rest if needed (imports helper functions from mia_export)
         if pose is not None and reset_to_rest and parent_indices is not None:
-            print(f"[MIA Export] Applying pose-to-rest transformation...")
+            log.info("Applying pose-to-rest transformation...")
             _apply_pose_to_rest_inline(armature, pose, bones_idx_dict, parent_indices, input_meshes, joints_normalized, template_bone_data)
 
         # Debug: Check materials before FBX export
-        print(f"[MIA Export] Pre-FBX export material check:")
+        log.info("Pre-FBX export material check:")
         for mesh_obj in input_meshes:
-            print(f"[MIA Export]   Mesh '{mesh_obj.name}': {len(mesh_obj.data.vertices)} verts")
+            log.info(f"Mesh '{mesh_obj.name}': {len(mesh_obj.data.vertices)} verts")
             if mesh_obj.data.materials:
-                print(f"[MIA Export]     Has {len(mesh_obj.data.materials)} material(s)")
+                log.info(f"Has {len(mesh_obj.data.materials)} material(s)")
                 for i, mat in enumerate(mesh_obj.data.materials):
                     if mat:
-                        print(f"[MIA Export]     Material[{i}]: {mat.name}")
+                        log.info("Material[%s]: %s", i, mat.name)
                         if mat.use_nodes and mat.node_tree:
                             for node in mat.node_tree.nodes:
                                 if node.type == 'TEX_IMAGE' and node.image:
                                     img = node.image
-                                    print(f"[MIA Export]       Texture: {img.name} ({img.size[0]}x{img.size[1]}) packed={img.packed_file is not None}")
+                                    log.info(f"Texture: {img.name} ({img.size[0]}x{img.size[1]}) packed={img.packed_file is not None}")
             else:
-                print(f"[MIA Export]     WARNING: No materials!")
+                log.warning("WARNING: No materials!")
 
         # Fix image filepaths and pack for FBX embedding
         # FBX exporter needs proper filepaths with filenames, not just directories
-        print(f"[MIA Export] Fixing image filepaths for FBX export...")
+        log.info("Fixing image filepaths for FBX export...")
         fbm_dir = output_path.rsplit('.', 1)[0] + '.fbm'
         os.makedirs(fbm_dir, exist_ok=True)
 
@@ -676,15 +673,15 @@ def _export_mia_fbx_direct(
                 img.filepath_raw = img_filepath
                 img.file_format = 'PNG'
                 img.save()
-                print(f"[MIA Export]   Saved texture: {img_filepath}")
+                log.info("Saved texture: %s", img_filepath)
 
                 # Now pack it
                 if img.packed_file is None:
                     try:
                         img.pack()
-                        print(f"[MIA Export]   Packed: {img.name}")
+                        log.info("Packed: %s", img.name)
                     except Exception as e:
-                        print(f"[MIA Export]   Failed to pack {img.name}: {e}")
+                        log.info("Failed to pack %s: %s", img.name, e)
 
         # Export FBX
         bpy.context.view_layer.update()
@@ -697,7 +694,7 @@ def _export_mia_fbx_direct(
             path_mode='COPY',
             embed_textures=True,
         )
-        print(f"[MIA Export] Exported to: {output_path}")
+        log.info("Exported to: %s", output_path)
 
         # Also export GLB (better texture support for preview tools)
         glb_path = output_path.rsplit('.', 1)[0] + '.glb'
@@ -709,12 +706,12 @@ def _export_mia_fbx_direct(
             export_materials='EXPORT',
             export_image_format='AUTO',
         )
-        print(f"[MIA Export] Also exported GLB: {glb_path}")
+        log.info("Also exported GLB: %s", glb_path)
 
         # Debug: Check output file size
         if os.path.exists(output_path):
             fbx_size = os.path.getsize(output_path)
-            print(f"[MIA Export] FBX file size: {fbx_size} bytes")
+            log.info("FBX file size: %s bytes", fbx_size)
 
     finally:
         # Clean up temp mesh file
@@ -831,7 +828,7 @@ def _apply_pose_to_rest_inline(armature_obj, pose, bones_idx_dict, parent_indice
                     bone.roll = template_data['roll']
                 roll_count += 1
         bpy.ops.object.mode_set(mode='OBJECT')
-        print(f"[MIA Export] Re-applied template bone orientations to {roll_count} bones after pose-to-rest")
+        log.info("Re-applied template bone orientations to %s bones after pose-to-rest", roll_count)
 
     # Re-add armature modifier
     for mesh_obj in input_meshes:
@@ -845,7 +842,7 @@ def _apply_pose_to_rest_inline(armature_obj, pose, bones_idx_dict, parent_indice
     bpy.ops.pose.transforms_clear()
     bpy.ops.object.mode_set(mode='OBJECT')
 
-    print(f"[MIA Export] Skeleton transformed to rest pose")
+    log.info("Skeleton transformed to rest pose")
 
 
 def _export_mia_fbx(
@@ -873,7 +870,7 @@ def _export_mia_fbx(
 
     if _check_bpy_available():
         # Use bpy directly (preferred - no subprocess needed)
-        print("[MIA] Using bpy directly for FBX export...")
+        log.info("Using bpy directly for FBX export...")
         _export_mia_fbx_direct(data, output_path, remove_fingers, reset_to_rest, template_path)
 
         # Verify output was created
@@ -881,7 +878,7 @@ def _export_mia_fbx(
             raise RuntimeError(f"Export completed but output file not created: {output_path}")
     else:
         # Fallback: use subprocess with Blender executable
-        print("[MIA] bpy not available, falling back to subprocess method...")
+        log.info("bpy not available, falling back to subprocess method...")
         _export_mia_fbx_subprocess(data, output_path, remove_fingers, reset_to_rest, template_path)
 
 
@@ -909,4 +906,4 @@ def clear_mia_cache():
     """Clear the MIA model cache."""
     global _MIA_MODEL_CACHE
     _MIA_MODEL_CACHE.clear()
-    print("[MIA] Model cache cleared")
+    log.info("Model cache cleared")

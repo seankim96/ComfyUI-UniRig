@@ -19,7 +19,9 @@ from .spec import ConfigSpec
 from ..tokenizer.spec import TokenizerSpec, TokenizerConfig
 from ..tokenizer.parse import get_tokenizer
 from ..model.spec import ModelInput
+import logging
 
+log = logging.getLogger("unirig")
 @dataclass
 class DatasetConfig(ConfigSpec):
     '''
@@ -92,7 +94,7 @@ class UniRigDatasetModule(pl.LightningDataModule):
         self.data_name                  = data_name
         
         if debug:
-            print("\033[31mWARNING: debug mode, dataloader will be extremely slow !!!\033[0m")
+            log.warning("WARNING: debug mode, dataloader will be extremely slow !!!")
         
         # build train datapath
         if self.train_dataset_config is not None:

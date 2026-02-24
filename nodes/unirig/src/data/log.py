@@ -1,6 +1,8 @@
 import os
 from typing import List
+import logging
 
+log = logging.getLogger("unirig")
 login_time = ''
 log_filepath = ''
 
@@ -32,19 +34,19 @@ def end_log():
 
 def new_entry(entry_name):
     global log_filepath
-    print(f"\033[32mNow processing {entry_name}...\033[0m")
+    log.info("Now processing %s...", entry_name)
     logs.append(Entry(entry_name))
 
 def add_error(error):
     global log_filepath
-    print(f"\033[31mError found when processing {logs[-1].entry}: {error}\033[0m")
+    log.error(f"Error found when processing {logs[-1].entry}: {error}")
     logs[-1].error = error
     with open(log_filepath, 'a') as file:
         file.write(f"Entry: {logs[-1].entry}, Error: {error}\n")
 
 def add_warning(warning):
     global log_filepath
-    print(f"\033[33mWarning found when processing {logs[-1].entry}: {warning}\033[0m")
+    log.warning(f"Warning found when processing {logs[-1].entry}: {warning}")
     logs[-1].warning.append(warning)
     with open(log_filepath, 'a') as file:
         file.write(f"Entry: {logs[-1].entry}, Warning: {warning}\n")

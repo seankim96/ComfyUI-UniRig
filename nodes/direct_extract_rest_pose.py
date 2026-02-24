@@ -6,7 +6,9 @@ This module is imported directly when bpy is available as a Python module.
 import os
 import numpy as np
 from typing import List
+import logging
 
+log = logging.getLogger("unirig")
 
 def extract_rest_pose_from_fbx(input_fbx: str, output_fbx: str) -> int:
     """
@@ -30,15 +32,15 @@ def extract_rest_pose_from_fbx(input_fbx: str, output_fbx: str) -> int:
             "bpy module not available. Make sure you're running in the unirig isolated environment."
         )
 
-    print(f"[DirectRestPose] Extracting rest pose from: {input_fbx}")
+    log.info("Extracting rest pose from: %s", input_fbx)
 
     # Clean default scene
     _clean_bpy()
 
     # Import FBX
-    print(f"[DirectRestPose] Importing FBX...")
+    log.info("Importing FBX...")
     bpy.ops.import_scene.fbx(filepath=input_fbx)
-    print(f"[DirectRestPose] [OK] FBX imported")
+    log.info("[OK] FBX imported")
 
     # Find armature
     armature = None
@@ -51,12 +53,12 @@ def extract_rest_pose_from_fbx(input_fbx: str, output_fbx: str) -> int:
         raise RuntimeError("No armature found in FBX file")
 
     bone_count = len(armature.data.bones)
-    print(f"[DirectRestPose] Found armature: {armature.name} with {bone_count} bones")
+    log.info("Found armature: %s with %s bones", armature.name, bone_count)
 
     # Clear all animation data
     if armature.animation_data:
         armature.animation_data_clear()
-        print(f"[DirectRestPose] Cleared animation data from armature")
+        log.info("Cleared animation data from armature")
 
     # Reset all bones to rest pose
     bpy.context.view_layer.objects.active = armature
@@ -70,7 +72,7 @@ def extract_rest_pose_from_fbx(input_fbx: str, output_fbx: str) -> int:
         bone.scale = (1, 1, 1)
 
     bpy.ops.object.mode_set(mode='OBJECT')
-    print(f"[DirectRestPose] Reset {bone_count} bones to rest pose")
+    log.info("Reset %s bones to rest pose", bone_count)
 
     # Also clear animation from any mesh children
     for child in armature.children:
@@ -78,7 +80,7 @@ def extract_rest_pose_from_fbx(input_fbx: str, output_fbx: str) -> int:
             child.animation_data_clear()
 
     # Export FBX
-    print(f"[DirectRestPose] Exporting to: {output_fbx}")
+    log.info("Exporting to: %s", output_fbx)
 
     # Ensure output directory exists
     os.makedirs(os.path.dirname(output_fbx), exist_ok=True)
@@ -92,7 +94,7 @@ def extract_rest_pose_from_fbx(input_fbx: str, output_fbx: str) -> int:
         embed_textures=True,
     )
 
-    print(f"[DirectRestPose] [OK] Exported rest pose FBX")
+    log.info("[OK] Exported rest pose FBX")
     return bone_count
 
 
@@ -125,7 +127,7 @@ def create_smpl_skeleton_fbx(
             "bpy module not available. Make sure you're running in the unirig isolated environment."
         )
 
-    print(f"[DirectRestPose] Creating SMPL skeleton with {len(joint_names)} joints")
+    log.info(f"Creating SMPL skeleton with {len(joint_names)} joints")
 
     # Clean default scene
     _clean_bpy()
@@ -192,13 +194,13 @@ def create_smpl_skeleton_fbx(
     bpy.ops.object.mode_set(mode='OBJECT')
 
     bone_count = len(joint_names)
-    print(f"[DirectRestPose] Created {bone_count} bones")
+    log.info("Created %s bones", bone_count)
 
     # Ensure output directory exists
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     # Export FBX
-    print(f"[DirectRestPose] Exporting to: {output_path}")
+    log.info("Exporting to: %s", output_path)
     bpy.ops.export_scene.fbx(
         filepath=output_path,
         use_selection=False,
@@ -206,7 +208,7 @@ def create_smpl_skeleton_fbx(
         add_leaf_bones=True,
     )
 
-    print(f"[DirectRestPose] [OK] Exported SMPL skeleton FBX")
+    log.info("[OK] Exported SMPL skeleton FBX")
     return bone_count
 
 

@@ -12,7 +12,9 @@ import json
 import math
 import numpy as np
 from mathutils import Vector, Matrix, Quaternion, Euler
+import logging
 
+log = logging.getLogger("unirig")
 
 def ortho6d_to_matrix(ortho6d):
     """
@@ -130,15 +132,15 @@ def apply_pose_to_rest(armature_obj, pose, bones_idx_dict, parent_indices, input
         template_bone_data: Optional dict mapping bone names to template data including rolls
     """
     if pose is None:
-        print("[MIA Export] No pose data - skipping pose-to-rest transformation")
+        log.info("No pose data - skipping pose-to-rest transformation")
         return
 
     if parent_indices is None:
-        print("[MIA Export] No kinematic tree - skipping pose-to-rest transformation")
+        log.info("No kinematic tree - skipping pose-to-rest transformation")
         return
 
-    print(f"[MIA Export] Applying pose-to-rest transformation...")
-    print(f"[MIA Export] Using MIA joints for pose computation (shape: {mia_joints.shape})")
+    log.info("Applying pose-to-rest transformation...")
+    log.info("Using MIA joints for pose computation (shape: %s)", mia_joints.shape)
 
     # Use MIA-predicted joints for pose computation (these match what the pose was predicted for)
     joints = mia_joints
@@ -149,18 +151,18 @@ def apply_pose_to_rest(armature_obj, pose, bones_idx_dict, parent_indices, input
     # Set root bone to identity (no global movement)
     pose_global[0] = np.eye(4)
 
-    print(f"[MIA Export] Computed global transforms for {len(pose_global)} bones")
+    log.info(f"Computed global transforms for {len(pose_global)} bones")
 
     # === DEBUG: Print sample transforms ===
-    print(f"[MIA Export DEBUG] Sample pose transforms (T-pose to input pose, forward):")
+    log.debug("Sample pose transforms (T-pose to input pose, forward):")
     for bone_name in ["mixamorig:Hips", "mixamorig:Spine", "mixamorig:Head"]:
         if bone_name in bones_idx_dict:
             idx = bones_idx_dict[bone_name]
             rot = pose_global[idx][:3, :3]
             trans = pose_global[idx][:3, 3]
-            print(f"  {bone_name} (idx={idx}):")
-            print(f"    Rotation diag: [{rot[0,0]:.4f}, {rot[1,1]:.4f}, {rot[2,2]:.4f}]")
-            print(f"    Translation: [{trans[0]:.4f}, {trans[1]:.4f}, {trans[2]:.4f}]")
+            log.info("  %s (idx=%s):", bone_name, idx)
+            log.info(f"    Rotation diag: [{rot[0,0]:.4f}, {rot[1,1]:.4f}, {rot[2,2]:.4f}]")
+            log.info(f"    Translation: [{trans[0]:.4f}, {trans[1]:.4f}, {trans[2]:.4f}]")
 
     # Define finger bone prefixes to skip (fingers often have problematic transforms)
     finger_prefixes = [
@@ -210,22 +212,22 @@ def apply_pose_to_rest(armature_obj, pose, bones_idx_dict, parent_indices, input
             pbone.location = (0, 0, 0)
     bpy.context.view_layer.update()
 
-    print(f"[MIA Export] Skipped {skipped_fingers} finger bones (keeping original pose)")
+    log.info("Skipped %s finger bones (keeping original pose)", skipped_fingers)
 
     bpy.ops.object.mode_set(mode='OBJECT')
-    print(f"[MIA Export] Applied global transforms to {applied_count} bones")
+    log.info("Applied global transforms to %s bones", applied_count)
 
     # Update view layer
     bpy.context.view_layer.update()
 
     # === DEBUG: Print bone positions after pose transform ===
-    print(f"[MIA Export DEBUG] Bone positions AFTER pose transform:")
+    log.debug("Bone positions AFTER pose transform:")
     bpy.ops.object.mode_set(mode='POSE')
     for bone_name in ["mixamorig:Hips", "mixamorig:Spine", "mixamorig:Head", "mixamorig:LeftArm", "mixamorig:RightArm"]:
         pbone = armature_obj.pose.bones.get(bone_name)
         if pbone:
             head_world = armature_obj.matrix_world @ pbone.head
-            print(f"  {bone_name}: head=({head_world.x:.4f}, {head_world.y:.4f}, {head_world.z:.4f})")
+            log.info("  %s: head=(%.4f, %.4f, %.4f)", bone_name, head_world.x, head_world.y, head_world.z)
     bpy.ops.object.mode_set(mode='OBJECT')
 
     # Apply the posed armature as new rest pose
@@ -259,7 +261,7 @@ def apply_pose_to_rest(armature_obj, pose, bones_idx_dict, parent_indices, input
                     bone.roll = template_data['roll']
                 roll_count += 1
         bpy.ops.object.mode_set(mode='OBJECT')
-        print(f"[MIA Export] Re-applied template bone orientations to {roll_count} bones after pose-to-rest")
+        log.info("Re-applied template bone orientations to %s bones after pose-to-rest", roll_count)
 
     # Re-add armature modifier
     for mesh_obj in input_meshes:
@@ -274,16 +276,16 @@ def apply_pose_to_rest(armature_obj, pose, bones_idx_dict, parent_indices, input
     bpy.ops.object.mode_set(mode='OBJECT')
 
     # === DEBUG: Print final bone positions in rest pose ===
-    print(f"[MIA Export DEBUG] Final bone positions (rest pose):")
+    log.debug("Final bone positions (rest pose):")
     bpy.ops.object.mode_set(mode='EDIT')
     for bone_name in ["mixamorig:Hips", "mixamorig:Spine", "mixamorig:Head", "mixamorig:LeftArm", "mixamorig:RightArm"]:
         bone = armature_obj.data.edit_bones.get(bone_name)
         if bone:
             head_world = armature_obj.matrix_world @ bone.head
-            print(f"  {bone_name}: head=({head_world.x:.4f}, {head_world.y:.4f}, {head_world.z:.4f})")
+            log.info("  %s: head=(%.4f, %.4f, %.4f)", bone_name, head_world.x, head_world.y, head_world.z)
     bpy.ops.object.mode_set(mode='OBJECT')
 
-    print(f"[MIA Export] Skeleton transformed to rest pose (using forward rotations, armature modifier inverts)")
+    log.info("Skeleton transformed to rest pose (using forward rotations, armature modifier inverts)")
 
 
 def parse_args():
@@ -406,7 +408,7 @@ def apply_template_orientations(armature_obj, template_bone_data, bones_idx_dict
             applied_count += 1
 
     bpy.ops.object.mode_set(mode='OBJECT')
-    print(f"[MIA Export] Applied template orientations to {applied_count} bones")
+    log.info("Applied template orientations to %s bones", applied_count)
 
 
 def set_rest_bones(armature_obj, head, tail, bones_idx_dict, template_bone_data=None, reset_as_rest=False):
@@ -473,7 +475,7 @@ def set_rest_bones(armature_obj, head, tail, bones_idx_dict, template_bone_data=
             armature_obj.data.edit_bones.remove(bone)
 
     if bones_to_remove:
-        print(f"[MIA Export] Removed {len(bones_to_remove)} end bones: {bones_to_remove[:5]}...")
+        log.info(f"Removed {len(bones_to_remove)} end bones: {bones_to_remove[:5]}...")
 
     bpy.ops.object.mode_set(mode='OBJECT')
 
@@ -497,7 +499,7 @@ def set_weights(mesh_obj_list, weights, bones_idx_dict):
     total_verts = sum(vertices_num)
 
     if total_verts != weights.shape[0]:
-        print(f"[MIA Export] Warning: vertex count mismatch: {total_verts} vs {weights.shape[0]}")
+        log.warning(f"Warning: vertex count mismatch: {total_verts} vs {weights.shape[0]}")
         return
 
     # Split weights per mesh
@@ -548,7 +550,7 @@ def remove_finger_bones(armature_obj, bones_idx_dict):
             del bones_idx_dict[bone_name]
 
     bpy.ops.object.mode_set(mode='OBJECT')
-    print(f"[MIA Export] Removed {len(bones_to_remove)} finger bones")
+    log.info(f"Removed {len(bones_to_remove)} finger bones")
     return armature_obj
 
 
@@ -563,21 +565,21 @@ def export_fbx(output_path):
         path_mode='COPY',
         embed_textures=True,
     )
-    print(f"[MIA Export] Exported to: {output_path}")
+    log.info("Exported to: %s", output_path)
 
 
 def main():
     args = parse_args()
 
     if not args["input_path"] or not args["output_path"] or not args["template_path"]:
-        print("Usage: blender --background --python mia_export.py -- --input_path <json> --output_path <fbx> --template_path <fbx>")
+        log.info("Usage: blender --background --python mia_export.py -- --input_path <json> --output_path <fbx> --template_path <fbx>")
         sys.exit(1)
 
-    print(f"[MIA Export] Input: {args['input_path']}")
-    print(f"[MIA Export] Output: {args['output_path']}")
-    print(f"[MIA Export] Template: {args['template_path']}")
-    print(f"[MIA Export] Remove fingers: {args['remove_fingers']}")
-    print(f"[MIA Export] Reset to rest: {args['reset_to_rest']}")
+    log.info(f"Input: {args['input_path']}")
+    log.info(f"Output: {args['output_path']}")
+    log.info(f"Template: {args['template_path']}")
+    log.info(f"Remove fingers: {args['remove_fingers']}")
+    log.info(f"Reset to rest: {args['reset_to_rest']}")
 
     # Load input data
     with open(args["input_path"], 'r') as f:
@@ -599,18 +601,18 @@ def main():
     if "pose_path" in data:
         pose_shape = data["pose_shape"]
         pose = np.fromfile(data["pose_path"], dtype=np.float32).reshape(pose_shape)
-        print(f"[MIA Export] Loaded pose data: {pose.shape}")
+        log.info("Loaded pose data: %s", pose.shape)
 
     parent_indices = data.get("parent_indices")
     if parent_indices:
-        print(f"[MIA Export] Loaded kinematic tree: {len(parent_indices)} bones")
+        log.info(f"Loaded kinematic tree: {len(parent_indices)} bones")
 
     bones_idx_dict = data["bones_idx_dict"]
     mesh_path = data["mesh_path"]
 
-    print(f"[MIA Export] Loaded weights: {bw.shape}")
-    print(f"[MIA Export] Loaded joints: {joints.shape}")
-    print(f"[MIA Export] Bones: {len(bones_idx_dict)}")
+    log.info("Loaded weights: %s", bw.shape)
+    log.info("Loaded joints: %s", joints.shape)
+    log.info(f"Bones: {len(bones_idx_dict)}")
 
     # Reset scene and load template
     reset_scene()
@@ -618,18 +620,18 @@ def main():
     armature = get_armature(template_objs)
 
     if armature is None:
-        print("[MIA Export] ERROR: No armature found in template!")
+        log.error("ERROR: No armature found in template!")
         sys.exit(1)
 
-    print(f"[MIA Export] Loaded template armature: {armature.name}")
-    print(f"[MIA Export] Template rotation: {[r for r in armature.rotation_euler]}")
+    log.info("Loaded template armature: %s", armature.name)
+    log.info(f"Template rotation: {[r for r in armature.rotation_euler]}")
 
     # Keep template's rotation (90 deg X) - this transforms Y-up local to Z-up world
     # MIA joints are Y-up, so they match the template's local space directly
 
     # Capture template bone orientations (in local/Y-up space)
     template_bone_data = get_template_bone_data(armature)
-    print(f"[MIA Export] Captured orientations for {len(template_bone_data)} template bones")
+    log.info(f"Captured orientations for {len(template_bone_data)} template bones")
 
     # Clear any pose transforms
     armature.animation_data_clear()
@@ -649,17 +651,17 @@ def main():
     elif mesh_path.endswith(".obj"):
         bpy.ops.wm.obj_import(filepath=mesh_path)
     else:
-        print(f"[MIA Export] ERROR: Unsupported mesh format: {mesh_path}")
+        log.error("ERROR: Unsupported mesh format: %s", mesh_path)
         sys.exit(1)
 
     new_objs = set(bpy.context.scene.objects) - old_objs
     input_meshes = get_meshes(list(new_objs))
 
     if not input_meshes:
-        print("[MIA Export] ERROR: No mesh found in input!")
+        log.error("ERROR: No mesh found in input!")
         sys.exit(1)
 
-    print(f"[MIA Export] Loaded {len(input_meshes)} mesh(es) from input")
+    log.info(f"Loaded {len(input_meshes)} mesh(es) from input")
 
     # Remove template meshes (we use input mesh instead)
     template_meshes = get_meshes(template_objs)
@@ -675,53 +677,53 @@ def main():
     debug_prefix = os.path.splitext(os.path.basename(args["output_path"]))[0]
 
     # === DEBUG: Print input mesh stats ===
-    print(f"\n{'='*60}")
-    print(f"[MIA Export DEBUG] INPUT MESH STATS (before transformation)")
-    print(f"{'='*60}")
+    log.info("\n%s", '='*60)
+    log.debug("INPUT MESH STATS (before transformation)")
+    log.info("%s", '='*60)
     for i, mesh_obj in enumerate(input_meshes):
         mesh_data = mesh_obj.data
         verts = np.array([v.co for v in mesh_data.vertices])
-        print(f"  Mesh {i} '{mesh_obj.name}':")
-        print(f"    Vertices: {len(verts)}")
-        print(f"    Bounds X: [{verts[:, 0].min():.4f}, {verts[:, 0].max():.4f}]")
-        print(f"    Bounds Y: [{verts[:, 1].min():.4f}, {verts[:, 1].max():.4f}]")
-        print(f"    Bounds Z: [{verts[:, 2].min():.4f}, {verts[:, 2].max():.4f}]")
-        print(f"    Center: ({verts.mean(axis=0)[0]:.4f}, {verts.mean(axis=0)[1]:.4f}, {verts.mean(axis=0)[2]:.4f})")
+        log.info("  Mesh %s '%s':", i, mesh_obj.name)
+        log.info(f"    Vertices: {len(verts)}")
+        log.info(f"    Bounds X: [{verts[:, 0].min():.4f}, {verts[:, 0].max():.4f}]")
+        log.info(f"    Bounds Y: [{verts[:, 1].min():.4f}, {verts[:, 1].max():.4f}]")
+        log.info(f"    Bounds Z: [{verts[:, 2].min():.4f}, {verts[:, 2].max():.4f}]")
+        log.info(f"    Center: ({verts.mean(axis=0)[0]:.4f}, {verts.mean(axis=0)[1]:.4f}, {verts.mean(axis=0)[2]:.4f})")
 
     # === DEBUG: Print input joints stats ===
-    print(f"\n{'='*60}")
-    print(f"[MIA Export DEBUG] INPUT JOINTS STATS (MIA output)")
-    print(f"{'='*60}")
-    print(f"  Joints shape: {joints.shape}")
-    print(f"  Joints bounds X: [{joints[:, 0].min():.4f}, {joints[:, 0].max():.4f}]")
-    print(f"  Joints bounds Y: [{joints[:, 1].min():.4f}, {joints[:, 1].max():.4f}]")
-    print(f"  Joints bounds Z: [{joints[:, 2].min():.4f}, {joints[:, 2].max():.4f}]")
+    log.info("\n%s", '='*60)
+    log.debug("INPUT JOINTS STATS (MIA output)")
+    log.info("%s", '='*60)
+    log.info("  Joints shape: %s", joints.shape)
+    log.info(f"  Joints bounds X: [{joints[:, 0].min():.4f}, {joints[:, 0].max():.4f}]")
+    log.info(f"  Joints bounds Y: [{joints[:, 1].min():.4f}, {joints[:, 1].max():.4f}]")
+    log.info(f"  Joints bounds Z: [{joints[:, 2].min():.4f}, {joints[:, 2].max():.4f}]")
     hips_idx = bones_idx_dict.get("mixamorig:Hips")
     head_idx = bones_idx_dict.get("mixamorig:Head")
     if hips_idx is not None and head_idx is not None:
-        print(f"  Hips position: ({joints[hips_idx, 0]:.4f}, {joints[hips_idx, 1]:.4f}, {joints[hips_idx, 2]:.4f})")
-        print(f"  Head position: ({joints[head_idx, 0]:.4f}, {joints[head_idx, 1]:.4f}, {joints[head_idx, 2]:.4f})")
+        log.info(f"  Hips position: ({joints[hips_idx, 0]:.4f}, {joints[hips_idx, 1]:.4f}, {joints[hips_idx, 2]:.4f})")
+        log.info(f"  Head position: ({joints[head_idx, 0]:.4f}, {joints[head_idx, 1]:.4f}, {joints[head_idx, 2]:.4f})")
 
     # === DEBUG: Print armature info ===
-    print(f"\n{'='*60}")
-    print(f"[MIA Export DEBUG] ARMATURE INFO")
-    print(f"{'='*60}")
-    print(f"  Armature name: {armature.name}")
-    print(f"  Rotation euler: {[r for r in armature.rotation_euler]}")
-    print(f"  Rotation (degrees): {[r * 180 / 3.14159 for r in armature.rotation_euler]}")
-    print(f"  Matrix world:\n{armature.matrix_world}")
+    log.info("\n%s", '='*60)
+    log.debug("ARMATURE INFO")
+    log.info("%s", '='*60)
+    log.info("  Armature name: %s", armature.name)
+    log.info(f"  Rotation euler: {[r for r in armature.rotation_euler]}")
+    log.info(f"  Rotation (degrees): {[r * 180 / 3.14159 for r in armature.rotation_euler]}")
+    log.info("  Matrix world:\n%s", armature.matrix_world)
 
     # === ORIGINAL MIA APPROACH ===
     # 1. Save armature's world matrix and get scaling factor
     matrix_world = armature.matrix_world.copy()
     scaling = matrix_world.to_scale()[0]
-    print(f"\n[MIA Export] Step 1: Saved matrix_world, scaling = {scaling}")
-    print(f"  Matrix world rotation (from to_euler): {[r * 180 / 3.14159 for r in matrix_world.to_euler()]}")
+    log.info("\n[MIA Export] Step 1: Saved matrix_world, scaling = %s", scaling)
+    log.info(f"  Matrix world rotation (from to_euler): {[r * 180 / 3.14159 for r in matrix_world.to_euler()]}")
 
     # 2. Reset armature to identity (work in Y-up local space)
     armature.matrix_world.identity()
     bpy.context.view_layer.update()
-    print(f"[MIA Export] Step 2: Reset armature.matrix_world to identity")
+    log.info("Step 2: Reset armature.matrix_world to identity")
 
     # === DEBUG: Save mesh BEFORE transformation ===
     debug_mesh_before = os.path.join(debug_dir, f"{debug_prefix}_debug_mesh_BEFORE_transform.obj")
@@ -730,16 +732,16 @@ def main():
         mesh_obj.select_set(True)
     bpy.ops.wm.obj_export(filepath=debug_mesh_before, export_selected_objects=True)
     bpy.ops.object.select_all(action='DESELECT')
-    print(f"[MIA Export DEBUG] Saved mesh BEFORE transform: {debug_mesh_before}")
+    log.debug("Saved mesh BEFORE transform: %s", debug_mesh_before)
 
     # 3. Transform mesh vertices: Y-Z swap and divide by scaling
-    print(f"\n[MIA Export] Step 3: Transforming mesh vertices (Y-Z swap, /scaling)")
+    log.info("\n[MIA Export] Step 3: Transforming mesh vertices (Y-Z swap, /scaling)")
     for mesh_obj in input_meshes:
         mesh_data = mesh_obj.data
         verts = np.array([v.co for v in mesh_data.vertices])
 
-        print(f"  Mesh '{mesh_obj.name}' BEFORE transform:")
-        print(f"    Sample vert[0]: ({verts[0, 0]:.4f}, {verts[0, 1]:.4f}, {verts[0, 2]:.4f})")
+        log.info("  Mesh '%s' BEFORE transform:", mesh_obj.name)
+        log.info(f"    Sample vert[0]: ({verts[0, 0]:.4f}, {verts[0, 1]:.4f}, {verts[0, 2]:.4f})")
 
         # Y-Z swap: matches original MIA
         # verts[:, 1], verts[:, 2] = verts[:, 2].copy(), -verts[:, 1].copy()
@@ -749,11 +751,11 @@ def main():
         verts[:, 2] = new_z
         verts = verts / scaling
 
-        print(f"  Mesh '{mesh_obj.name}' AFTER transform:")
-        print(f"    Sample vert[0]: ({verts[0, 0]:.4f}, {verts[0, 1]:.4f}, {verts[0, 2]:.4f})")
-        print(f"    New bounds X: [{verts[:, 0].min():.4f}, {verts[:, 0].max():.4f}]")
-        print(f"    New bounds Y: [{verts[:, 1].min():.4f}, {verts[:, 1].max():.4f}]")
-        print(f"    New bounds Z: [{verts[:, 2].min():.4f}, {verts[:, 2].max():.4f}]")
+        log.info("  Mesh '%s' AFTER transform:", mesh_obj.name)
+        log.info(f"    Sample vert[0]: ({verts[0, 0]:.4f}, {verts[0, 1]:.4f}, {verts[0, 2]:.4f})")
+        log.info(f"    New bounds X: [{verts[:, 0].min():.4f}, {verts[:, 0].max():.4f}]")
+        log.info(f"    New bounds Y: [{verts[:, 1].min():.4f}, {verts[:, 1].max():.4f}]")
+        log.info(f"    New bounds Z: [{verts[:, 2].min():.4f}, {verts[:, 2].max():.4f}]")
 
         for i, v in enumerate(mesh_data.vertices):
             v.co = verts[i]
@@ -766,38 +768,38 @@ def main():
         mesh_obj.select_set(True)
     bpy.ops.wm.obj_export(filepath=debug_mesh_after, export_selected_objects=True)
     bpy.ops.object.select_all(action='DESELECT')
-    print(f"[MIA Export DEBUG] Saved mesh AFTER transform: {debug_mesh_after}")
+    log.debug("Saved mesh AFTER transform: %s", debug_mesh_after)
 
     # 4. Set bones with joints/scaling (now in same Y-up normalized space as mesh)
     joints_normalized = joints / scaling
     joints_tail_normalized = joints_tail / scaling if joints_tail is not None else None
-    print(f"\n[MIA Export] Step 4: Setting bones with joints/scaling")
-    print(f"  Joints normalized bounds Y: [{joints_normalized[:, 1].min():.4f}, {joints_normalized[:, 1].max():.4f}]")
+    log.info("\n[MIA Export] Step 4: Setting bones with joints/scaling")
+    log.info(f"  Joints normalized bounds Y: [{joints_normalized[:, 1].min():.4f}, {joints_normalized[:, 1].max():.4f}]")
     if hips_idx is not None:
-        print(f"  Hips normalized: ({joints_normalized[hips_idx, 0]:.4f}, {joints_normalized[hips_idx, 1]:.4f}, {joints_normalized[hips_idx, 2]:.4f})")
+        log.info(f"  Hips normalized: ({joints_normalized[hips_idx, 0]:.4f}, {joints_normalized[hips_idx, 1]:.4f}, {joints_normalized[hips_idx, 2]:.4f})")
 
     set_rest_bones(armature, joints_normalized, joints_tail_normalized, bones_idx_dict,
                    template_bone_data=template_bone_data, reset_as_rest=False)
 
     # 5. Parent mesh to armature
-    print(f"\n[MIA Export] Step 5: Parenting mesh to armature")
+    log.info("\n[MIA Export] Step 5: Parenting mesh to armature")
     for mesh_obj in input_meshes:
         mesh_obj.parent = armature
-        print(f"  Parented '{mesh_obj.name}' to '{armature.name}'")
+        log.info("  Parented '%s' to '%s'", mesh_obj.name, armature.name)
 
     # 6. Apply weights
-    print(f"\n[MIA Export] Step 6: Applying weights")
-    print(f"  Weights shape: {bw.shape}")
-    print(f"  Weights sum per vertex (should be ~1.0): min={bw.sum(axis=1).min():.4f}, max={bw.sum(axis=1).max():.4f}")
+    log.info("\n[MIA Export] Step 6: Applying weights")
+    log.info("  Weights shape: %s", bw.shape)
+    log.info(f"  Weights sum per vertex (should be ~1.0): min={bw.sum(axis=1).min():.4f}, max={bw.sum(axis=1).max():.4f}")
     set_weights(input_meshes, bw, bones_idx_dict)
 
     # 7. Add armature modifier
-    print(f"\n[MIA Export] Step 7: Adding armature modifier")
+    log.info("\n[MIA Export] Step 7: Adding armature modifier")
     for mesh_obj in input_meshes:
         mod = mesh_obj.modifiers.new(name="Armature", type='ARMATURE')
         mod.object = armature
         mod.use_vertex_groups = True
-        print(f"  Added armature modifier to '{mesh_obj.name}'")
+        log.info("  Added armature modifier to '%s'", mesh_obj.name)
 
     # === DEBUG: Save rigged mesh BEFORE restoring matrix ===
     debug_rigged_before = os.path.join(debug_dir, f"{debug_prefix}_debug_rigged_BEFORE_matrix_restore.fbx")
@@ -808,28 +810,28 @@ def main():
         add_leaf_bones=False,
         bake_anim=False,
     )
-    print(f"[MIA Export DEBUG] Saved rigged mesh BEFORE matrix restore: {debug_rigged_before}")
+    log.debug("Saved rigged mesh BEFORE matrix restore: %s", debug_rigged_before)
 
     # 8. Restore armature matrix (transforms everything to Z-up world)
     armature.matrix_world = matrix_world
     bpy.context.view_layer.update()
-    print(f"\n[MIA Export] Step 8: Restored armature.matrix_world")
-    print(f"  Final armature rotation (degrees): {[r * 180 / 3.14159 for r in armature.rotation_euler]}")
+    log.info("\n[MIA Export] Step 8: Restored armature.matrix_world")
+    log.info(f"  Final armature rotation (degrees): {[r * 180 / 3.14159 for r in armature.rotation_euler]}")
 
     # === DEBUG: Print final stats ===
-    print(f"\n{'='*60}")
-    print(f"[MIA Export DEBUG] FINAL STATS")
-    print(f"{'='*60}")
+    log.info("\n%s", '='*60)
+    log.debug("FINAL STATS")
+    log.info("%s", '='*60)
     for mesh_obj in input_meshes:
         # Get world-space bounds
         bbox_corners = [mesh_obj.matrix_world @ Vector(corner) for corner in mesh_obj.bound_box]
         xs = [c.x for c in bbox_corners]
         ys = [c.y for c in bbox_corners]
         zs = [c.z for c in bbox_corners]
-        print(f"  Mesh '{mesh_obj.name}' world bounds:")
-        print(f"    X: [{min(xs):.4f}, {max(xs):.4f}]")
-        print(f"    Y: [{min(ys):.4f}, {max(ys):.4f}]")
-        print(f"    Z: [{min(zs):.4f}, {max(zs):.4f}]")
+        log.info("  Mesh '%s' world bounds:", mesh_obj.name)
+        log.info(f"    X: [{min(xs):.4f}, {max(xs):.4f}]")
+        log.info(f"    Y: [{min(ys):.4f}, {max(ys):.4f}]")
+        log.info(f"    Z: [{min(zs):.4f}, {max(zs):.4f}]")
 
     # Apply pose-to-rest transformation if pose data is available
     if pose is not None and args["reset_to_rest"]:
@@ -840,7 +842,7 @@ def main():
 
     # Export
     export_fbx(args["output_path"])
-    print("[MIA Export] Done!")
+    log.info("Done!")
 
 
 if __name__ == "__main__":

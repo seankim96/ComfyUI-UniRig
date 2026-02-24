@@ -11,7 +11,9 @@ conflicts with torch_cluster. Do NOT add module-level bpy imports.
 """
 
 import math
+import logging
 
+log = logging.getLogger("unirig")
 
 def extract_bone_debug(fbx_path: str) -> dict:
     """
@@ -31,7 +33,7 @@ def extract_bone_debug(fbx_path: str) -> dict:
     import bpy
     from mathutils import Vector, Matrix, Euler
 
-    print(f"[Direct Bone Debug] Loading FBX: {fbx_path}")
+    log.debug("Loading FBX: %s", fbx_path)
 
     # Clean scene first
     _clean_bpy()
@@ -47,7 +49,7 @@ def extract_bone_debug(fbx_path: str) -> dict:
             break
 
     if not armature_obj:
-        print("[Direct Bone Debug] No armature found in FBX")
+        log.debug("No armature found in FBX")
         return {
             'bones': [],
             'armature_name': None,
@@ -57,7 +59,7 @@ def extract_bone_debug(fbx_path: str) -> dict:
         }
 
     armature = armature_obj.data
-    print(f"[Direct Bone Debug] Found armature: {armature_obj.name} with {len(armature.bones)} bones")
+    log.debug(f"Found armature: {armature_obj.name} with {len(armature.bones)} bones")
 
     # We need to enter edit mode to get accurate bone data (head, tail, roll)
     # First, make the armature object active
@@ -138,7 +140,7 @@ def extract_bone_debug(fbx_path: str) -> dict:
     # Build hierarchy depth for each bone
     _compute_hierarchy_depth(bones_data)
 
-    print(f"[Direct Bone Debug] Extracted data for {len(bones_data)} bones")
+    log.debug(f"Extracted data for {len(bones_data)} bones")
 
     return {
         'bones': bones_data,

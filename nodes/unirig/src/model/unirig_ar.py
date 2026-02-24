@@ -8,7 +8,9 @@ from typing import Dict, List, Union
 from transformers import AutoModelForCausalLM, OPTConfig, LogitsProcessor, LogitsProcessorList
 
 from .spec import ModelSpec, ModelInput
+import logging
 
+log = logging.getLogger("unirig")
 # Load OPT-350m config from local JSON file (no HuggingFace download needed)
 _CONFIG_PATH = Path(__file__).parent / "opt_350m_config.json"
 with open(_CONFIG_PATH) as f:
@@ -24,7 +26,7 @@ try:
     FLASH_ATTN_AVAILABLE = True
 except ImportError:
     FLASH_ATTN_AVAILABLE = False
-    print("[UniRig] flash_attn not available for AR model, using standard PyTorch attention (slower but functional)")
+    log.info("flash_attn not available for AR model, using standard PyTorch attention (slower but functional)")
 
 class VocabSwitchingLogitsProcessor(LogitsProcessor):
     def __init__(self, tokenizer: TokenizerSpec, start_tokens: LongTensor):
@@ -58,11 +60,11 @@ class UniRigAR(ModelSpec):
     
     def __init__(self, llm, mesh_encoder, **kwargs):
         super().__init__()
-        print("[UniRigAR] Initializing UniRigAR model...")
+        log.info("Initializing UniRigAR model...")
 
         self.tokenizer: TokenizerSpec = kwargs.get('tokenizer')
         self.vocab_size = self.tokenizer.vocab_size
-        print(f"[UniRigAR] Vocab size: {self.vocab_size}")
+        log.info("Vocab size: %s", self.vocab_size)
 
         _d = llm.copy()
         _d['vocab_size'] = self.tokenizer.vocab_size
@@ -71,27 +73,27 @@ class UniRigAR(ModelSpec):
         if not FLASH_ATTN_AVAILABLE and '_attn_implementation' in _d:
             original_impl = _d['_attn_implementation']
             _d.pop('_attn_implementation')
-            print(f"[UniRigAR] Removed '{original_impl}' from config, using default attention")
+            log.info("Removed '%s' from config, using default attention", original_impl)
         elif FLASH_ATTN_AVAILABLE:
-            print(f"[UniRigAR] Using flash_attention_2")
+            log.info("Using flash_attention_2")
 
         # Build config from local JSON file (no HuggingFace download)
         config_dict = _OPT_350M_CONFIG.copy()
         config_dict['vocab_size'] = _d['vocab_size']  # Override with tokenizer vocab
-        print(f"[UniRigAR] Loading transformer model from local OPT-350m config")
+        log.info("Loading transformer model from local OPT-350m config")
         llm_config = OPTConfig(**config_dict)
         # Force float32 precision for the model
         llm_config.torch_dtype = torch.float32
         # Force enable pre_norm
         llm_config.pre_norm = True
         self.transformer = AutoModelForCausalLM.from_config(config=llm_config)
-        print(f"[UniRigAR] [OK] Transformer loaded")
+        log.info("[OK] Transformer loaded")
 
         self.hidden_size = llm.hidden_size
 
-        print(f"[UniRigAR] Loading mesh encoder...")
+        log.info("Loading mesh encoder...")
         self.mesh_encoder = get_mesh_encoder(**mesh_encoder)
-        print(f"[UniRigAR] [OK] Mesh encoder loaded")
+        log.info("[OK] Mesh encoder loaded")
         
         if (
             isinstance(self.mesh_encoder, MAP_MESH_ENCODER.michelangelo) or

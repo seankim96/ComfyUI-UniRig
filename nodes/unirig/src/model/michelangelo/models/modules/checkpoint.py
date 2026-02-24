@@ -59,15 +59,15 @@ def checkpoint(
 class CheckpointFunction(torch.autograd.Function):
     @staticmethod
     def _get_fwd_decorator():
-        if version.parse(torch.__version__) >= version.parse('2.5.0'):
-            return torch.amp.custom_fwd(device_type='cuda')
+        if version.parse(torch.__version__) >= version.parse('2.0.0'):
+            return torch.amp.custom_fwd()
         else:
             return torch.cuda.amp.custom_fwd()
 
     @staticmethod
     def _get_bwd_decorator():
-        if version.parse(torch.__version__) >= version.parse('2.5.0'):
-            return torch.amp.custom_bwd(device_type='cuda')
+        if version.parse(torch.__version__) >= version.parse('2.0.0'):
+            return torch.amp.custom_bwd()
         else:
             def custom_bwd(bwd):
                 return torch.cuda.amp.custom_bwd(bwd=bwd)

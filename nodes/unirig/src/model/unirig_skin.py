@@ -1,3 +1,4 @@
+import logging
 import torch
 from torch import nn, FloatTensor, LongTensor, Tensor
 import torch.nn.functional as F
@@ -8,13 +9,15 @@ from transformers import AutoModelForCausalLM, AutoConfig
 import math
 import torch_scatter
 
+log = logging.getLogger("unirig")
+
 # Try to import flash_attn, fall back to standard PyTorch if not available
 try:
     from flash_attn.modules.mha import MHA as FlashMHA
     FLASH_ATTN_AVAILABLE = True
 except ImportError:
     FLASH_ATTN_AVAILABLE = False
-    print("[UniRig] flash_attn not available, using standard PyTorch attention (slower but functional)")
+    log.info("flash_attn not available, using standard PyTorch attention (slower but functional)")
 
 # Wrapper to make standard PyTorch MultiheadAttention compatible with flash_attn MHA API
 class MHA(nn.Module):

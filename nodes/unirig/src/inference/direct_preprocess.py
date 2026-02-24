@@ -16,7 +16,9 @@ import base64
 import struct
 import zlib
 import os
+import logging
 
+log = logging.getLogger("unirig")
 
 def preprocess_mesh(
     input_file: str,
@@ -48,9 +50,9 @@ def preprocess_mesh(
     # Lazy import to avoid torch_cluster conflict
     import bpy
 
-    print(f"[Direct Preprocess] Input: {input_file}")
-    print(f"[Direct Preprocess] Output: {output_npz}")
-    print(f"[Direct Preprocess] Target faces: {target_face_count}")
+    log.info("Input: %s", input_file)
+    log.info("Output: %s", output_npz)
+    log.info("Target faces: %s", target_face_count)
 
     # Clear scene
     bpy.ops.object.select_all(action='SELECT')
@@ -58,7 +60,7 @@ def preprocess_mesh(
 
     # Import mesh based on file extension
     ext = Path(input_file).suffix.lower()
-    print(f"[Direct Preprocess] Loading {ext} file...")
+    log.info("Loading %s file...", ext)
 
     try:
         if ext == '.obj':
@@ -74,10 +76,10 @@ def preprocess_mesh(
         else:
             raise ValueError(f"Unsupported format: {ext}")
 
-        print(f"[Direct Preprocess] Import successful")
+        log.info("Import successful")
 
     except Exception as e:
-        print(f"[Direct Preprocess] Import failed: {e}")
+        log.info("Import failed: %s", e)
         raise
 
     # Get all meshes
@@ -86,7 +88,7 @@ def preprocess_mesh(
     if not meshes:
         raise RuntimeError("No meshes found in file")
 
-    print(f"[Direct Preprocess] Found {len(meshes)} mesh(es)")
+    log.info(f"Found {len(meshes)} mesh(es)")
 
     # Combine all meshes
     if len(meshes) > 1:
@@ -102,7 +104,7 @@ def preprocess_mesh(
     else:
         mesh_obj = meshes[0]
 
-    print(f"[Direct Preprocess] Processing mesh: {mesh_obj.name}")
+    log.info("Processing mesh: %s", mesh_obj.name)
 
     # Apply all transforms
     bpy.ops.object.select_all(action='DESELECT')
@@ -114,7 +116,7 @@ def preprocess_mesh(
     mesh = mesh_obj.data
 
     # Triangulate
-    print("[Direct Preprocess] Triangulating...")
+    log.info("Triangulating...")
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.mesh.select_all(action='SELECT')
     bpy.ops.mesh.quads_convert_to_tris()
@@ -122,10 +124,10 @@ def preprocess_mesh(
 
     # Simplify if needed
     current_faces = len(mesh.polygons)
-    print(f"[Direct Preprocess] Current face count: {current_faces}")
+    log.info("Current face count: %s", current_faces)
 
     if current_faces > target_face_count:
-        print(f"[Direct Preprocess] Decimating to {target_face_count} faces...")
+        log.info("Decimating to %s faces...", target_face_count)
 
         # Add decimate modifier
         decimate_mod = mesh_obj.modifiers.new(name='Decimate', type='DECIMATE')
@@ -135,7 +137,7 @@ def preprocess_mesh(
         # Apply modifier
         bpy.ops.object.modifier_apply(modifier=decimate_mod.name)
 
-        print(f"[Direct Preprocess] Decimated to {len(mesh.polygons)} faces")
+        log.info(f"Decimated to {len(mesh.polygons)} faces")
 
     # Extract vertex and face data
     vertices = np.zeros((len(mesh.vertices), 3), dtype=np.float32)
@@ -145,11 +147,11 @@ def preprocess_mesh(
     faces = np.zeros((len(mesh.polygons), 3), dtype=np.int32)
     for i, p in enumerate(mesh.polygons):
         if len(p.vertices) != 3:
-            print(f"[Direct Preprocess] Warning: Non-triangular face found")
+            log.warning("Warning: Non-triangular face found")
             continue
         faces[i] = [p.vertices[0], p.vertices[1], p.vertices[2]]
 
-    print(f"[Direct Preprocess] Extracted {len(vertices)} vertices, {len(faces)} faces")
+    log.info(f"Extracted {len(vertices)} vertices, {len(faces)} faces")
 
     # Calculate vertex normals (Blender 4.2+ compatible)
     # Force recalculation by updating the mesh
@@ -160,14 +162,14 @@ def preprocess_mesh(
     for i, v in enumerate(mesh.vertices):
         vertex_normals[i] = v.normal
 
-    print("[Direct Preprocess] Calculated vertex normals")
+    log.info("Calculated vertex normals")
 
     # Calculate face normals
     face_normals = np.zeros((len(faces), 3), dtype=np.float32)
     for i, p in enumerate(mesh.polygons):
         face_normals[i] = p.normal
 
-    print("[Direct Preprocess] Calculated face normals")
+    log.info("Calculated face normals")
 
     # Extract UV coordinates if available
     uv_coords = None
@@ -189,9 +191,9 @@ def preprocess_mesh(
 
         uv_coords = np.array(uv_coords_list, dtype=np.float32)
         uv_faces = np.array(uv_faces_list, dtype=np.int32)
-        print(f"[Direct Preprocess] Extracted UV coordinates: {len(uv_coords)} UVs for {len(uv_faces)} faces")
+        log.info(f"Extracted UV coordinates: {len(uv_coords)} UVs for {len(uv_faces)} faces")
     else:
-        print("[Direct Preprocess] No UV layer found")
+        log.info("No UV layer found")
 
     # Extract material/texture info if available
     material_name = None
@@ -210,8 +212,8 @@ def preprocess_mesh(
                 for node in mat.node_tree.nodes:
                     if node.type == 'TEX_IMAGE' and node.image:
                         texture_path = node.image.filepath
-                        print(f"[Direct Preprocess] Found texture node: {node.name}")
-                        print(f"[Direct Preprocess] Texture path: {texture_path}")
+                        log.info("Found texture node: %s", node.name)
+                        log.info("Texture path: %s", texture_path)
 
                         # Extract actual image data
                         tex_base64, tex_fmt, tex_w, tex_h = _extract_texture_from_image(node.image)
@@ -220,9 +222,9 @@ def preprocess_mesh(
                             texture_format = tex_fmt
                             texture_width = tex_w
                             texture_height = tex_h
-                            print(f"[Direct Preprocess] Texture extracted successfully: {tex_w}x{tex_h} {tex_fmt}")
+                            log.info("Texture extracted successfully: %sx%s %s", tex_w, tex_h, tex_fmt)
                         break
-            print(f"[Direct Preprocess] Material: {material_name}")
+            log.info("Material: %s", material_name)
 
     # Save as NPZ (raw_data format expected by UniRig)
     # For skeleton extraction, skeleton fields are set to None
@@ -249,12 +251,12 @@ def preprocess_mesh(
         matrix_local=None,
     )
 
-    print(f"[Direct Preprocess] Saved to: {output_npz}")
+    log.info("Saved to: %s", output_npz)
     if texture_data_base64:
-        print(f"[Direct Preprocess] Texture data included: {texture_width}x{texture_height} {texture_format}")
+        log.info("Texture data included: %sx%s %s", texture_width, texture_height, texture_format)
     else:
-        print(f"[Direct Preprocess] No texture data extracted")
-    print("[Direct Preprocess] Done!")
+        log.info("No texture data extracted")
+    log.info("Done!")
 
     # Return mesh data dict for convenience
     return {
@@ -282,7 +284,7 @@ def _extract_texture_from_image(image, max_size=2048):
         width, height = image.size
         channels = image.channels
 
-        print(f"[Direct Preprocess] Extracting texture: {width}x{height}, {channels} channels")
+        log.info("Extracting texture: %sx%s, %s channels", width, height, channels)
 
         # Get pixel data - Blender stores as flat RGBA float array
         pixels = np.array(image.pixels[:])
@@ -301,7 +303,7 @@ def _extract_texture_from_image(image, max_size=2048):
             scale = max_size / max(width, height)
             new_width = int(width * scale)
             new_height = int(height * scale)
-            print(f"[Direct Preprocess] Resizing texture from {width}x{height} to {new_width}x{new_height}")
+            log.info("Resizing texture from %sx%s to %sx%s", width, height, new_width, new_height)
 
             # Simple nearest-neighbor resize using numpy
             row_indices = (np.arange(new_height) * height / new_height).astype(int)
@@ -315,13 +317,11 @@ def _extract_texture_from_image(image, max_size=2048):
         # Encode to base64
         encoded = base64.b64encode(png_data).decode('utf-8')
 
-        print(f"[Direct Preprocess] Texture encoded: {len(encoded) / 1024:.1f} KB base64")
+        log.info(f"Texture encoded: {len(encoded) / 1024:.1f} KB base64")
         return encoded, 'PNG', width, height
 
     except Exception as e:
-        print(f"[Direct Preprocess] Error extracting texture: {e}")
-        import traceback
-        traceback.print_exc()
+        log.error("Failed to extract texture from mesh", exc_info=True)
         return None, None, 0, 0
 
 

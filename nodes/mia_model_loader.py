@@ -1,11 +1,12 @@
 """
 MIALoadModel - Load Make-It-Animatable models for fast humanoid rigging.
-
-Uses comfy-env isolated environment for GPU dependencies.
 """
 
+import logging
 import sys
 from pathlib import Path
+
+log = logging.getLogger("unirig")
 
 
 class MIALoadModel:
@@ -36,7 +37,7 @@ class MIALoadModel:
 
     def load_models(self, cache_to_gpu=True):
         """Return MIA config. Models are loaded by MIAAutoRig when needed."""
-        print(f"[MIALoadModel] MIA config: cache_to_gpu={cache_to_gpu}")
+        log.info("MIA config: cache_to_gpu=%s", cache_to_gpu)
         return ({
             "backend": "mia",
             "cache_to_gpu": cache_to_gpu,

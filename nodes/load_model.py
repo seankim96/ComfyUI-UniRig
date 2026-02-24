@@ -2,13 +2,15 @@
 Model loader nodes for UniRig - Pre-load and cache ML models for faster inference.
 
 These nodes download and cache models so subsequent inference runs are faster.
-Uses comfy-env isolated environment for GPU dependencies.
 """
 
+import logging
 import os
 import sys
 import yaml
 from pathlib import Path
+
+log = logging.getLogger("unirig")
 
 # Lazy import for Box to avoid import errors before install.py runs
 def _get_box():
@@ -18,9 +20,9 @@ def _get_box():
 
 # Support both relative imports (ComfyUI) and absolute imports (testing)
 try:
-    from .base import UNIRIG_PATH, UNIRIG_MODELS_DIR, LIB_DIR
+    from .base import UNIRIG_PATH, UNIRIG_MODELS_DIR
 except ImportError:
-    from base import UNIRIG_PATH, UNIRIG_MODELS_DIR, LIB_DIR
+    from base import UNIRIG_PATH, UNIRIG_MODELS_DIR
 
 # Global model cache (for config dicts)
 _MODEL_CACHE = {}
@@ -31,66 +33,34 @@ _MODEL_CACHE_MODULE = None
 # Store import errors for better error messages
 _MODEL_CACHE_IMPORT_ERROR = None
 
+try:
+    from . import model_cache as _MODEL_CACHE_MODULE
+except ImportError as e:
+    _MODEL_CACHE_IMPORT_ERROR = e
+    error_msg = str(e).lower()
+    if "spconv" in error_msg:
+        log.error("spconv is not installed. Install with: pip install spconv-cu121 (match your CUDA version)")
+    elif "torch_scatter" in error_msg:
+        log.error("torch-scatter is not installed. Install with: pip install torch-scatter")
+    elif "torch_cluster" in error_msg:
+        log.error("torch-cluster is not installed. Install with: pip install torch-cluster")
+    else:
+        log.error("Failed to load model cache: %s", e)
+    _MODEL_CACHE_MODULE = None
+except Exception as e:
+    _MODEL_CACHE_IMPORT_ERROR = e
+    log.error("Failed to load model cache: %s", e, exc_info=True)
+    _MODEL_CACHE_MODULE = None
+
 
 def _get_model_cache():
     """Get the in-process model cache module."""
-    global _MODEL_CACHE_MODULE, _MODEL_CACHE_IMPORT_ERROR
-    if _MODEL_CACHE_MODULE is None:
-        # Use sys.modules to ensure same instance across all imports
-        if "unirig_model_cache" in sys.modules:
-            _MODEL_CACHE_MODULE = sys.modules["unirig_model_cache"]
-        else:
-            cache_path = os.path.join(LIB_DIR, "model_cache.py")
-            if os.path.exists(cache_path):
-                import importlib.util
-                spec = importlib.util.spec_from_file_location("unirig_model_cache", cache_path)
-                _MODEL_CACHE_MODULE = importlib.util.module_from_spec(spec)
-                sys.modules["unirig_model_cache"] = _MODEL_CACHE_MODULE
-                try:
-                    spec.loader.exec_module(_MODEL_CACHE_MODULE)
-                except ImportError as e:
-                    # Capture the actual import error for better error messages
-                    _MODEL_CACHE_IMPORT_ERROR = e
-                    error_msg = str(e).lower()
-
-                    # Log specific dependency that's missing
-                    if "spconv" in error_msg:
-                        print("[UniRig] ERROR: spconv is not installed.")
-                        print("[UniRig] Install with: pip install spconv-cu121 (match your CUDA version)")
-                    elif "torch_scatter" in error_msg:
-                        print("[UniRig] ERROR: torch-scatter is not installed.")
-                        print("[UniRig] Install with: pip install torch-scatter")
-                    elif "torch_cluster" in error_msg:
-                        print("[UniRig] ERROR: torch-cluster is not installed.")
-                        print("[UniRig] Install with: pip install torch-cluster")
-                    else:
-                        print(f"[UniRig] ERROR: Failed to load model cache: {e}")
-
-                    # Cleanup failed module
-                    del sys.modules["unirig_model_cache"]
-                    _MODEL_CACHE_MODULE = False
-                except Exception as e:
-                    _MODEL_CACHE_IMPORT_ERROR = e
-                    print(f"[UniRig] ERROR: Failed to load model cache: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    del sys.modules["unirig_model_cache"]
-                    _MODEL_CACHE_MODULE = False
-            else:
-                print(f"[UniRig] Warning: Model cache module not found at {cache_path}")
-                _MODEL_CACHE_MODULE = False
-    return _MODEL_CACHE_MODULE if _MODEL_CACHE_MODULE else None
+    return _MODEL_CACHE_MODULE
 
 
 def get_model_cache_error():
     """Get the error that caused model cache loading to fail."""
     return _MODEL_CACHE_IMPORT_ERROR
-
-
-def _ensure_unirig_in_path():
-    """Ensure UniRig is in Python path."""
-    if UNIRIG_PATH not in sys.path:
-        sys.path.insert(0, UNIRIG_PATH)
 
 
 def _load_yaml_config(config_path: str):
@@ -133,8 +103,8 @@ class UniRigLoadSkeletonModel:
 
     def load_model(self, model_id="apozz/UniRig-safetensors", cache_to_gpu=True):
         """Load and cache skeleton model configuration."""
-        print(f"[UniRigLoadSkeletonModel] Loading skeleton model: {model_id}")
-        print(f"[UniRigLoadSkeletonModel] GPU caching: {'enabled' if cache_to_gpu else 'disabled (will offload to CPU)'}")
+        log.info("Loading skeleton model: %s", model_id)
+        log.info("GPU caching: %s", 'enabled' if cache_to_gpu else 'disabled (will offload to CPU)')
 
         cache_key = f"skeleton_{model_id}"
 
@@ -143,13 +113,13 @@ class UniRigLoadSkeletonModel:
             cached_model = _MODEL_CACHE[cache_key]
             # Update cache_to_gpu setting in case it changed
             cached_model["cache_to_gpu"] = cache_to_gpu
-            print(f"[UniRigLoadSkeletonModel] Using cached model configuration")
-            
+            log.info("Using cached model configuration")
+
             # If cache_to_gpu is enabled but model is not in GPU memory, load it now
             if cache_to_gpu and cached_model.get("model_cache_key") is None:
                 model_cache = _get_model_cache()
                 if model_cache:
-                    print(f"[UniRigLoadSkeletonModel] Loading model into GPU memory (delayed load)...")
+                    log.info("Loading model into GPU memory (delayed load)...")
                     try:
                         model_cache_key = model_cache.load_model_into_memory(
                             model_type="skeleton",
@@ -157,17 +127,15 @@ class UniRigLoadSkeletonModel:
                             cache_to_gpu=True
                         )
                         cached_model["model_cache_key"] = model_cache_key
-                        print(f"[UniRigLoadSkeletonModel] Model loaded into GPU memory")
+                        log.info("Model loaded into GPU memory")
                     except Exception as e:
-                        print(f"[UniRigLoadSkeletonModel] Warning: Failed to load into GPU memory: {e}")
+                        log.warning("Failed to load into GPU memory: %s", e)
                 
             return (cached_model,)
 
-        _ensure_unirig_in_path()
-
-        # Pre-download model weights
+                # Pre-download model weights
         try:
-            from src.inference.download import download
+            from .unirig.src.inference.download import download
 
             # Load task config to get checkpoint path
             task_config_path = os.path.join(
@@ -179,9 +147,9 @@ class UniRigLoadSkeletonModel:
             # Download checkpoint if needed
             checkpoint_path = task_config.get('resume_from_checkpoint', None)
             if checkpoint_path:
-                print(f"[UniRigLoadSkeletonModel] Downloading/verifying checkpoint...")
+                log.info("Downloading/verifying checkpoint...")
                 local_checkpoint = download(checkpoint_path)
-                print(f"[UniRigLoadSkeletonModel] Checkpoint ready: {local_checkpoint}")
+                log.info("Checkpoint ready: %s", local_checkpoint)
             else:
                 local_checkpoint = None
 
@@ -222,7 +190,7 @@ class UniRigLoadSkeletonModel:
             if cache_to_gpu:
                 model_cache = _get_model_cache()
                 if model_cache:
-                    print(f"[UniRigLoadSkeletonModel] Loading model into GPU memory...")
+                    log.info("Loading model into GPU memory...")
                     try:
                         model_cache_key = model_cache.load_model_into_memory(
                             model_type="skeleton",
@@ -230,25 +198,23 @@ class UniRigLoadSkeletonModel:
                             cache_to_gpu=True
                         )
                         model_wrapper["model_cache_key"] = model_cache_key
-                        print(f"[UniRigLoadSkeletonModel] Model loaded into GPU memory")
+                        log.info("Model loaded into GPU memory")
                     except Exception as e:
-                        print(f"[UniRigLoadSkeletonModel] Warning: Failed to load into GPU memory: {e}")
-                        print(f"[UniRigLoadSkeletonModel] Will use subprocess fallback")
+                        log.warning("Failed to load into GPU memory: %s", e)
+                        log.warning("Will use subprocess fallback")
                 else:
-                    print(f"[UniRigLoadSkeletonModel] Warning: Model cache not available")
+                    log.warning("Model cache not available")
 
             # Cache it
             _MODEL_CACHE[cache_key] = model_wrapper
 
-            print(f"[UniRigLoadSkeletonModel] Model configuration cached successfully")
-            print(f"[UniRigLoadSkeletonModel] Checkpoint: {local_checkpoint}")
+            log.info("Model configuration cached successfully")
+            log.info("Checkpoint: %s", local_checkpoint)
 
             return (model_wrapper,)
 
         except Exception as e:
-            print(f"[UniRigLoadSkeletonModel] Error loading model: {e}")
-            import traceback
-            traceback.print_exc()
+            log.error("Error loading model: %s", e, exc_info=True)
 
             # Return minimal config that will trigger full load in inference
             model_wrapper = {
@@ -297,8 +263,8 @@ class UniRigLoadSkinningModel:
 
     def load_model(self, model_id="apozz/UniRig-safetensors", cache_to_gpu=True):
         """Load and cache skinning model configuration."""
-        print(f"[UniRigLoadSkinningModel] Loading skinning model: {model_id}")
-        print(f"[UniRigLoadSkinningModel] GPU caching: {'enabled' if cache_to_gpu else 'disabled (will offload to CPU)'}")
+        log.info("Loading skinning model: %s", model_id)
+        log.info("GPU caching: %s", 'enabled' if cache_to_gpu else 'disabled (will offload to CPU)')
 
         cache_key = f"skinning_{model_id}"
 
@@ -307,13 +273,13 @@ class UniRigLoadSkinningModel:
             cached_model = _MODEL_CACHE[cache_key]
             # Update cache_to_gpu setting in case it changed
             cached_model["cache_to_gpu"] = cache_to_gpu
-            print(f"[UniRigLoadSkinningModel] Using cached model configuration")
-            
+            log.info("Using cached model configuration")
+
             # If cache_to_gpu is enabled but model is not in GPU memory, load it now
             if cache_to_gpu and cached_model.get("model_cache_key") is None:
                 model_cache = _get_model_cache()
                 if model_cache:
-                    print(f"[UniRigLoadSkinningModel] Loading model into GPU memory (delayed load)...")
+                    log.info("Loading model into GPU memory (delayed load)...")
                     try:
                         model_cache_key = model_cache.load_model_into_memory(
                             model_type="skinning",
@@ -321,17 +287,15 @@ class UniRigLoadSkinningModel:
                             cache_to_gpu=True
                         )
                         cached_model["model_cache_key"] = model_cache_key
-                        print(f"[UniRigLoadSkinningModel] Model loaded into GPU memory")
+                        log.info("Model loaded into GPU memory")
                     except Exception as e:
-                        print(f"[UniRigLoadSkinningModel] Warning: Failed to load into GPU memory: {e}")
+                        log.warning("Failed to load into GPU memory: %s", e)
                         
             return (cached_model,)
 
-        _ensure_unirig_in_path()
-
-        # Pre-download model weights
+                # Pre-download model weights
         try:
-            from src.inference.download import download
+            from .unirig.src.inference.download import download
 
             # Load task config to get checkpoint path
             task_config_path = os.path.join(
@@ -343,9 +307,9 @@ class UniRigLoadSkinningModel:
             # Download checkpoint if needed
             checkpoint_path = task_config.get('resume_from_checkpoint', None)
             if checkpoint_path:
-                print(f"[UniRigLoadSkinningModel] Downloading/verifying checkpoint...")
+                log.info("Downloading/verifying checkpoint...")
                 local_checkpoint = download(checkpoint_path)
-                print(f"[UniRigLoadSkinningModel] Checkpoint ready: {local_checkpoint}")
+                log.info("Checkpoint ready: %s", local_checkpoint)
             else:
                 local_checkpoint = None
 
@@ -376,7 +340,7 @@ class UniRigLoadSkinningModel:
             if cache_to_gpu:
                 model_cache = _get_model_cache()
                 if model_cache:
-                    print(f"[UniRigLoadSkinningModel] Loading model into GPU memory...")
+                    log.info("Loading model into GPU memory...")
                     try:
                         model_cache_key = model_cache.load_model_into_memory(
                             model_type="skinning",
@@ -384,25 +348,23 @@ class UniRigLoadSkinningModel:
                             cache_to_gpu=True
                         )
                         model_wrapper["model_cache_key"] = model_cache_key
-                        print(f"[UniRigLoadSkinningModel] Model loaded into GPU memory")
+                        log.info("Model loaded into GPU memory")
                     except Exception as e:
-                        print(f"[UniRigLoadSkinningModel] Warning: Failed to load into GPU memory: {e}")
-                        print(f"[UniRigLoadSkinningModel] Will use subprocess fallback")
+                        log.warning("Failed to load into GPU memory: %s", e)
+                        log.warning("Will use subprocess fallback")
                 else:
-                    print(f"[UniRigLoadSkinningModel] Warning: Model cache not available")
+                    log.warning("Model cache not available")
 
             # Cache it
             _MODEL_CACHE[cache_key] = model_wrapper
 
-            print(f"[UniRigLoadSkinningModel] Model configuration cached successfully")
-            print(f"[UniRigLoadSkinningModel] Checkpoint: {local_checkpoint}")
+            log.info("Model configuration cached successfully")
+            log.info("Checkpoint: %s", local_checkpoint)
 
             return (model_wrapper,)
 
         except Exception as e:
-            print(f"[UniRigLoadSkinningModel] Error loading model: {e}")
-            import traceback
-            traceback.print_exc()
+            log.error("Error loading model: %s", e, exc_info=True)
 
             # Return minimal config
             model_wrapper = {
@@ -437,6 +399,12 @@ class UniRigLoadModel:
                     "tooltip": "Keep models cached on GPU for faster inference. Disable to save VRAM (models will be loaded on-demand)."
                 }),
             },
+            "optional": {
+                "precision": (["auto", "bf16", "fp16", "fp32"], {
+                    "default": "auto",
+                    "tooltip": "Model precision. auto: best for your GPU (bf16 on Ampere+, fp16 on Volta/Turing, fp32 on older)."
+                }),
+            },
         }
 
     RETURN_TYPES = ("UNIRIG_MODEL",)
@@ -444,10 +412,10 @@ class UniRigLoadModel:
     FUNCTION = "load_models"
     CATEGORY = "UniRig"
 
-    def load_models(self, cache_to_gpu=True):
+    def load_models(self, cache_to_gpu=True, precision="auto"):
         """Load and cache both skeleton and skinning models."""
-        print(f"[UniRigLoadModel] Loading UniRig models...")
-        print(f"[UniRigLoadModel] GPU caching: {'enabled' if cache_to_gpu else 'disabled'}")
+        log.info("Loading UniRig models...")
+        log.info("GPU caching: %s", 'enabled' if cache_to_gpu else 'disabled')
 
         model_id = "apozz/UniRig-safetensors"
 
@@ -467,9 +435,10 @@ class UniRigLoadModel:
             "skinning_model": skinning_model,
             "model_id": model_id,
             "cache_to_gpu": cache_to_gpu,
+            "precision": precision,
         }
 
-        print(f"[UniRigLoadModel] Both models loaded successfully")
+        log.info("Both models loaded successfully")
         return (combined_model,)
 
 
@@ -477,7 +446,7 @@ def clear_model_cache():
     """Clear the global model cache."""
     global _MODEL_CACHE
     _MODEL_CACHE.clear()
-    print("[UniRig] Model cache cleared")
+    log.info("Model cache cleared")
 
 
 def get_cached_models():

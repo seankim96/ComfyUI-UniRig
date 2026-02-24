@@ -8,13 +8,9 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, Tuple, Optional
 import folder_paths
+import logging
 
-# Support both relative imports (ComfyUI) and absolute imports (testing)
-try:
-    from .base import LIB_DIR
-except ImportError:
-    from base import LIB_DIR
-
+log = logging.getLogger("unirig")
 # SMPL canonical skeleton (24 joints)
 SMPL_JOINT_NAMES = [
     "Pelvis", "L_Hip", "R_Hip", "Spine1", "L_Knee", "R_Knee",
@@ -56,32 +52,17 @@ SMPL_REST_POSITIONS = np.array([
 ], dtype=np.float32)
 
 
-# Direct extraction module cache
-_DIRECT_REST_POSE_MODULE = None
+# Direct extraction module (bpy as Python module)
+try:
+    from .lib import direct_extract_rest_pose as _direct_rest_pose_module
+except ImportError as e:
+    log.info("Direct rest pose module not available: %s", e)
+    _direct_rest_pose_module = None
 
 
 def _get_direct_rest_pose_module():
     """Get the direct rest pose extraction module for in-process extraction using bpy."""
-    global _DIRECT_REST_POSE_MODULE
-    if _DIRECT_REST_POSE_MODULE is None:
-        module_path = os.path.join(os.path.dirname(__file__), "lib", "direct_extract_rest_pose.py")
-        if os.path.exists(module_path):
-            try:
-                import importlib.util
-                spec = importlib.util.spec_from_file_location("direct_extract_rest_pose", module_path)
-                _DIRECT_REST_POSE_MODULE = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(_DIRECT_REST_POSE_MODULE)
-                print(f"[UniRig] Loaded direct rest pose module from {module_path}")
-            except ImportError as e:
-                print(f"[UniRig] Direct rest pose module not available (bpy not installed): {e}")
-                _DIRECT_REST_POSE_MODULE = False
-            except Exception as e:
-                print(f"[UniRig] Warning: Could not load direct rest pose module: {e}")
-                _DIRECT_REST_POSE_MODULE = False
-        else:
-            print(f"[UniRig] Warning: Direct rest pose module not found at {module_path}")
-            _DIRECT_REST_POSE_MODULE = False
-    return _DIRECT_REST_POSE_MODULE if _DIRECT_REST_POSE_MODULE else None
+    return _direct_rest_pose_module
 
 
 class UniRigExtractRestPose:
@@ -133,7 +114,7 @@ class UniRigExtractRestPose:
     ) -> Tuple[str, str]:
         """Extract rest pose skeleton and save as FBX."""
 
-        print(f"[UniRig ExtractRestPose] Source type: {source_type}")
+        log.info("Source type: %s", source_type)
 
         # Setup output path
         output_dir = folder_paths.get_output_directory()
@@ -165,14 +146,14 @@ class UniRigExtractRestPose:
             if not os.path.exists(fbx_path):
                 raise FileNotFoundError(f"FBX file not found: {fbx_path}")
 
-            print(f"[UniRig ExtractRestPose] Input FBX: {fbx_path}")
+            log.info("Input FBX: %s", fbx_path)
 
             # Extract rest pose from FBX
             bone_count = direct_module.extract_rest_pose_from_fbx(fbx_path, output_path)
             source_info = f"FBX: {os.path.basename(fbx_path)}"
 
         else:  # smpl
-            print(f"[UniRig ExtractRestPose] Creating SMPL rest pose skeleton")
+            log.info("Creating SMPL rest pose skeleton")
 
             # Use canonical SMPL positions (or compute from betas if provided)
             joint_positions = SMPL_REST_POSITIONS.copy()
@@ -180,7 +161,7 @@ class UniRigExtractRestPose:
             # If smpl_params has betas, we could compute actual joint positions
             # For now, use canonical T-pose
             if smpl_params and 'betas' in smpl_params:
-                print(f"[UniRig ExtractRestPose] Using canonical T-pose (betas shape computation not implemented)")
+                log.info("Using canonical T-pose (betas shape computation not implemented)")
 
             # Create SMPL skeleton
             bone_count = direct_module.create_smpl_skeleton_fbx(
@@ -191,8 +172,8 @@ class UniRigExtractRestPose:
             )
             source_info = "SMPL canonical T-pose"
 
-        print(f"[UniRig ExtractRestPose] Output: {output_path}")
-        print(f"[UniRig ExtractRestPose] Bones: {bone_count}")
+        log.info("Output: %s", output_path)
+        log.info("Bones: %s", bone_count)
 
         info = (
             f"Source: {source_info}\n"

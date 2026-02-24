@@ -10,7 +10,9 @@ from box import Box
 from torch.onnx.symbolic_opset11 import index_copy
 
 from .spec import ConfigSpec
+import logging
 
+log = logging.getLogger("unirig")
 @dataclass
 class DatapathConfig(ConfigSpec):
     '''
@@ -93,7 +95,7 @@ class Datapath():
                             })
                         assert len(file_items) > 0, f"files in {path} are all missing! root: {self.config.input_dataset_dir}"
                         if missing > 0:
-                            print(f"\033[31m{cls}: {missing} missing files\033[0m")
+                            log.info("%s: %s missing files", cls, missing)
                         self.files_by_class[cls].append(file_items)
                         self.class_positions[cls].append(0)
                         self.file_list.extend(file_items)

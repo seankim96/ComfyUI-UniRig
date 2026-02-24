@@ -1,18 +1,14 @@
 """
-WARNING: bpy (Blender Python API) import has been removed.
+WARNING: Most functions in this file require bpy and are intended for batch processing.
 
-Most functions in this file require bpy and are intended for batch processing during training.
-For ComfyUI inference, use the wrapper scripts in lib/ directory instead:
-- lib/blender_extract.py - for mesh extraction
-- lib/blender_export_fbx.py - for FBX export
-- lib/blender_parse_skeleton.py - for skeleton parsing
+For ComfyUI inference, use the direct bpy modules instead:
+- unirig/src/inference/direct_preprocess.py - for mesh extraction
+- unirig/src/inference/direct_export_fbx.py - for FBX export
 
-Functions using bpy will raise NameError or NotImplementedError if called.
-To use these functions for batch processing, run them via Blender subprocess.
+Functions using bpy will raise NameError or NotImplementedError if called without bpy.
 """
 
-# bpy import removed - use wrapper scripts for Blender operations
-# import bpy
+# bpy imported lazily where needed
 import os
 from collections import defaultdict
 from tqdm import tqdm
@@ -24,21 +20,23 @@ import fast_simplification
 from scipy.spatial import KDTree
 
 import argparse
+import logging
 import yaml
 from box import Box
+
+log = logging.getLogger("unirig")
 
 from .log import new_entry, add_error, add_warning, new_log, end_log
 from .raw_data import RawData
 
 def load(filepath: str):
     '''
-    This function requires bpy and should be run via Blender subprocess.
-    For ComfyUI inference, use lib/blender_extract.py wrapper instead.
+    This function requires bpy.
+    For ComfyUI inference, use unirig/src/inference/direct_preprocess.py instead.
     '''
     raise NotImplementedError(
         "This function requires bpy (Blender Python API). "
-        "For batch processing, run via Blender subprocess. "
-        "For ComfyUI inference, the extraction is handled by lib/blender_extract.py wrapper."
+        "For ComfyUI inference, use unirig/src/inference/direct_preprocess.py."
     )
     old_objs = set(bpy.context.scene.objects)
     
@@ -403,11 +401,11 @@ def extract_builtin(
         clean_bpy()
         new_entry(input_file)
         try:
-            print(f"Now processing {input_file}...")
+            log.info(f"Now processing {input_file}...")
             
             armature = load(input_file)
             
-            print('save to:', output_dir)
+            log.info("save to: %s", output_dir)
             os.makedirs(output_dir, exist_ok=True)
             
             if armature is not None:
@@ -443,18 +441,18 @@ def extract_builtin(
 
         except ValueError as e:
             add_error(str(e))
-            print(f"ValueError: {str(e)}")
+            log.error("ValueError: %s", e)
         except RuntimeError as e:
             add_error(str(e))
-            print(f"RuntimeError: {str(e)}")
+            log.error("RuntimeError: %s", e)
         except TimeoutError as e:
             add_error("time out")
-            print("TimeoutError: Processing timed out")
+            log.error("TimeoutError: Processing timed out")
         except Exception as e:
             add_error(f"Unexpected error: {str(e)}")
-            print(f"Unexpected error: {str(e)}")
+            log.error("Unexpected error: %s", e)
     end_log()
-    print(f"{tot} models processed")
+    log.info("%d models processed", tot)
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -494,7 +492,7 @@ def get_files(
             if not force_override and os.path.exists(raw_data_npz):
                 continue
             if warning and output_dir in vis:
-                print(f"\033[33mWARNING: duplicate output directory: {output_dir}, you need to rename prefix of files to avoid ambiguity\033[0m")
+                log.warning("duplicate output directory: %s, you need to rename prefix of files to avoid ambiguity", output_dir)
             vis[output_dir] = True
             files.append((file, output_dir))
     else:
@@ -513,7 +511,7 @@ def get_files(
                     if not force_override and os.path.exists(raw_data_npz):
                         continue
                     if warning and output_dir in vis:
-                        print(f"\033[33mWARNING: duplicate output directory: {output_dir}, you need to rename prefix of files to avoid ambiguity\033[0m")
+                        log.warning("duplicate output directory: %s, you need to rename prefix of files to avoid ambiguity", output_dir)
                     vis[output_dir] = True
                     files.append((os.path.join(root, file), output_dir))
 

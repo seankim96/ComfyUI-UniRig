@@ -23,7 +23,9 @@ from tqdm import tqdm
 
 # Vendored version - bpy imports removed (we use Blender as subprocess)
 from .utils import HiddenPrints, apply_transform, decompose_transform, quat_to_matrix, sample_mesh
+import logging
 
+log = logging.getLogger("unirig")
 MIXAMO_PREFIX = "mixamorig:"
 MIXAMO_JOINTS = (
     "mixamorig:Hips",
@@ -999,7 +1001,7 @@ class MixamoDataset(Dataset):
         self.geo_resample_ratio = float(geo_resample_ratio)
         assert sample_vertices != 0, f"Invalid {sample_vertices=}"
         if sample_vertices < 0:
-            print("Using all vertices of each character (typically used in eval mode), only support batch size 1!")
+            log.info("Using all vertices of each character (typically used in eval mode), only support batch size 1!")
         self.sample_vertices = int(sample_vertices)
         self.get_normals = get_normals
         self.same_animation_first = same_animation_first
@@ -1282,7 +1284,7 @@ if __name__ == "__main__":
         HAS_PYTORCH3D = True
     except ImportError:
         HAS_PYTORCH3D = False
-        print("Warning: pytorch3d not available, skipping Transform3d tests")
+        log.warning("Warning: pytorch3d not available, skipping Transform3d tests")
 
     from torch.utils.data import DataLoader
 
@@ -1306,7 +1308,7 @@ if __name__ == "__main__":
         pin_memory=True,
         worker_init_fn=seed_worker,
     )
-    print(len(dataset))
+    log.info("%s", len(dataset))
 
     # Test transformation matrix
     assert dataset.sample_vertices == -1 and dataloader.batch_size == 1
@@ -1401,9 +1403,9 @@ if __name__ == "__main__":
         verts_num[meta.char_id[0]] = verts.shape[1]
         if i == len(dataset.character_list) - 1:
             break
-    print(np.min(list(verts_num.values())))
-    print(np.max(list(verts_num.values())))
-    print(np.mean(list(verts_num.values())))
+    log.info("%s", np.min(list(verts_num.values())))
+    log.info("%s", np.max(list(verts_num.values())))
+    log.info("%s", np.mean(list(verts_num.values())))
     with open("./character_verts.json", "w") as f:
         json.dump(verts_num, f, indent=4, ensure_ascii=False)
 
@@ -1415,8 +1417,8 @@ if __name__ == "__main__":
         frame_num[meta.anim_id[0]] = len(meta.keyframes[0])
         if i == len(dataset.animation_list) - 1:
             break
-    print(np.min(list(frame_num.values())))
-    print(np.max(list(frame_num.values())))
-    print(np.mean(list(frame_num.values())))
+    log.info("%s", np.min(list(frame_num.values())))
+    log.info("%s", np.max(list(frame_num.values())))
+    log.info("%s", np.mean(list(frame_num.values())))
     with open("./animation_frames.json", "w") as f:
         json.dump(frame_num, f, indent=4, ensure_ascii=False)

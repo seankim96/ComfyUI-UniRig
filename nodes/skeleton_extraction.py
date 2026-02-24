@@ -12,14 +12,15 @@ import numpy as np
 from trimesh import Trimesh
 import time
 import folder_paths
+import logging
 
+log = logging.getLogger("unirig")
 TARGET_FACE_COUNT = 50000  # default for mesh decimation
 
 try:
     from .base import (
         UNIRIG_PATH,
         UNIRIG_MODELS_DIR,
-        LIB_DIR,
         decode_texture_to_comfy_image,
         create_placeholder_texture,
     )
@@ -27,7 +28,6 @@ except ImportError:
     from base import (
         UNIRIG_PATH,
         UNIRIG_MODELS_DIR,
-        LIB_DIR,
         decode_texture_to_comfy_image,
         create_placeholder_texture,
     )
@@ -185,51 +185,28 @@ SMPL_BONE_DIRECTIONS = {
 SMPL_DEFAULT_BONE_LENGTH = 0.1
 
 # Direct inference module
-_DIRECT_INFERENCE_MODULE = None
+try:
+    from .unirig.src.inference import direct as _direct_inference_module
+except ImportError as e:
+    log.info("Direct inference not available: %s", e)
+    _direct_inference_module = None
 
 # Direct preprocessing module (bpy as Python module)
-_DIRECT_PREPROCESS_MODULE = None
+try:
+    from .unirig.src.inference import direct_preprocess as _direct_preprocess_module
+except ImportError as e:
+    log.info("Direct preprocessing not available: %s", e)
+    _direct_preprocess_module = None
 
 
 def _get_direct_inference():
     """Get the direct inference module for in-process model inference."""
-    global _DIRECT_INFERENCE_MODULE
-    if _DIRECT_INFERENCE_MODULE is None:
-        direct_path = os.path.join(LIB_DIR, "unirig", "src", "inference", "direct.py")
-        if os.path.exists(direct_path):
-            import importlib.util
-            spec = importlib.util.spec_from_file_location("unirig_direct", direct_path)
-            _DIRECT_INFERENCE_MODULE = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(_DIRECT_INFERENCE_MODULE)
-            print(f"[UniRig] Loaded direct inference module from {direct_path}")
-        else:
-            print(f"[UniRig] Warning: Direct inference module not found at {direct_path}")
-            _DIRECT_INFERENCE_MODULE = False
-    return _DIRECT_INFERENCE_MODULE if _DIRECT_INFERENCE_MODULE else None
+    return _direct_inference_module
 
 
 def _get_direct_preprocess():
     """Get the direct preprocessing module for in-process mesh preprocessing using bpy."""
-    global _DIRECT_PREPROCESS_MODULE
-    if _DIRECT_PREPROCESS_MODULE is None:
-        preprocess_path = os.path.join(LIB_DIR, "unirig", "src", "inference", "direct_preprocess.py")
-        if os.path.exists(preprocess_path):
-            try:
-                import importlib.util
-                spec = importlib.util.spec_from_file_location("unirig_direct_preprocess", preprocess_path)
-                _DIRECT_PREPROCESS_MODULE = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(_DIRECT_PREPROCESS_MODULE)
-                print(f"[UniRig] Loaded direct preprocessing module from {preprocess_path}")
-            except ImportError as e:
-                print(f"[UniRig] Direct preprocessing not available (bpy not installed): {e}")
-                _DIRECT_PREPROCESS_MODULE = False
-            except Exception as e:
-                print(f"[UniRig] Warning: Could not load direct preprocessing module: {e}")
-                _DIRECT_PREPROCESS_MODULE = False
-        else:
-            print(f"[UniRig] Warning: Direct preprocessing module not found at {preprocess_path}")
-            _DIRECT_PREPROCESS_MODULE = False
-    return _DIRECT_PREPROCESS_MODULE if _DIRECT_PREPROCESS_MODULE else None
+    return _direct_preprocess_module
 
 
 
@@ -278,8 +255,8 @@ class UniRigExtractSkeletonNew:
     def extract(self, trimesh, skeleton_model, seed, skeleton_template="mixamo", target_face_count=None):
         """Extract skeleton using UniRig with cached model only."""
         total_start = time.time()
-        print(f"[UniRigExtractSkeletonNew] Starting skeleton extraction (cached model only)...")
-        print(f"[UniRigExtractSkeletonNew] Skeleton template: {skeleton_template}")
+        log.info("Starting skeleton extraction (cached model only)...")
+        log.info("Skeleton template: %s", skeleton_template)
 
         # Store original template choice before any remapping
         original_template = skeleton_template
@@ -291,12 +268,12 @@ class UniRigExtractSkeletonNew:
         # If mixamo is requested, use vroid for extraction (model trained on vroid), then remap names
         if skeleton_template == "mixamo":
             skeleton_template = "vroid"
-            print(f"[UniRigExtractSkeletonNew] Mixamo requested, using vroid extraction + name remapping")
+            log.info("Mixamo requested, using vroid extraction + name remapping")
 
         # If smpl is requested, use vroid for extraction, then filter to 22 SMPL joints
         if skeleton_template == "smpl":
             skeleton_template = "vroid"
-            print(f"[UniRigExtractSkeletonNew] SMPL requested, using vroid extraction + SMPL conversion")
+            log.info("SMPL requested, using vroid extraction + SMPL conversion")
 
         # Validate model is provided
         if skeleton_model is None:
@@ -312,7 +289,7 @@ class UniRigExtractSkeletonNew:
                 "Please connect a UniRigLoadSkeletonModel node."
             )
 
-        print(f"[UniRigExtractSkeletonNew] Using pre-loaded cached model")
+        log.info("Using pre-loaded cached model")
 
         # Check if UniRig is available
         if not os.path.exists(UNIRIG_PATH):
@@ -332,16 +309,16 @@ class UniRigExtractSkeletonNew:
 
             # Export mesh to GLB
             step_start = time.time()
-            print(f"[UniRigExtractSkeletonNew] Exporting mesh to {input_path}")
-            print(f"[UniRigExtractSkeletonNew] Mesh has {len(trimesh.vertices)} vertices, {len(trimesh.faces)} faces")
+            log.info("Exporting mesh to %s", input_path)
+            log.info(f"Mesh has {len(trimesh.vertices)} vertices, {len(trimesh.faces)} faces")
             trimesh.export(input_path)
             export_time = time.time() - step_start
-            print(f"[UniRigExtractSkeletonNew] Mesh exported in {export_time:.2f}s")
+            log.info("Mesh exported in %.2fs", export_time)
 
             # Step 1: Preprocess mesh using direct bpy import
             step_start = time.time()
             actual_face_count = target_face_count if target_face_count is not None else TARGET_FACE_COUNT
-            print(f"[UniRigExtractSkeletonNew] Using target face count: {actual_face_count}")
+            log.info("Using target face count: %s", actual_face_count)
 
             direct_preprocess = _get_direct_preprocess()
             if direct_preprocess is None:
@@ -350,7 +327,7 @@ class UniRigExtractSkeletonNew:
                     "Ensure bpy is installed: pip install bpy"
                 )
 
-            print(f"[UniRigExtractSkeletonNew] Step 1: Preprocessing mesh with direct bpy...")
+            log.info("Step 1: Preprocessing mesh with direct bpy...")
             direct_preprocess.preprocess_mesh(
                 input_file=input_path,
                 output_npz=npz_path,
@@ -361,7 +338,7 @@ class UniRigExtractSkeletonNew:
                 raise RuntimeError(f"Preprocessing failed: {npz_path} not created")
 
             preprocess_time = time.time() - step_start
-            print(f"[UniRigExtractSkeletonNew] [OK] Mesh preprocessed in {preprocess_time:.2f}s: {npz_path}")
+            log.info("[OK] Mesh preprocessed in %.2fs: %s", preprocess_time, npz_path)
 
             # Step 2: Run skeleton inference
             step_start = time.time()
@@ -374,9 +351,9 @@ class UniRigExtractSkeletonNew:
                 cls_value = "articulationxl"
 
             if cls_value:
-                print(f"[UniRigExtractSkeletonNew] Forcing skeleton template: {cls_value}")
+                log.info("Forcing skeleton template: %s", cls_value)
             else:
-                print(f"[UniRigExtractSkeletonNew] Using auto skeleton detection")
+                log.info("Using auto skeleton detection")
 
             # Run direct inference
             direct_module = _get_direct_inference()
@@ -386,7 +363,7 @@ class UniRigExtractSkeletonNew:
                     "Ensure all UniRig dependencies are installed."
                 )
 
-            print(f"[UniRigExtractSkeletonNew] Step 2: Running skeleton inference...")
+            log.info("Step 2: Running skeleton inference...")
 
             # Load raw_data.npz created by preprocessing
             raw_data = np.load(npz_path)
@@ -402,7 +379,7 @@ class UniRigExtractSkeletonNew:
             if not os.path.exists(checkpoint_path):
                 raise RuntimeError(f"Skeleton checkpoint not found: {checkpoint_path}")
 
-            print(f"[UniRigExtractSkeletonNew] Using checkpoint: {checkpoint_path}")
+            log.info("Using checkpoint: %s", checkpoint_path)
 
             # Run direct skeleton prediction
             direct_skeleton_result, norm_params = direct_module.predict_skeleton_from_mesh(
@@ -421,12 +398,12 @@ class UniRigExtractSkeletonNew:
                 raise RuntimeError("Skeleton prediction failed - no joints generated")
 
             num_joints = len(direct_skeleton_result['joints'])
-            print(f"[UniRigExtractSkeletonNew] [OK] Inference completed in {inference_time:.2f}s")
-            print(f"[UniRigExtractSkeletonNew] Generated {num_joints} joints")
+            log.info("[OK] Inference completed in %.2fs", inference_time)
+            log.info("Generated %s joints", num_joints)
 
             # Step 3: Process results
             step_start = time.time()
-            print(f"[UniRigExtractSkeletonNew] Step 3: Processing inference results...")
+            log.info("Step 3: Processing inference results...")
 
             # Extract skeleton data directly from model output
             all_joints = direct_skeleton_result['joints']
@@ -440,7 +417,7 @@ class UniRigExtractSkeletonNew:
                 if parent is not None and parent >= 0:
                     edges.append([parent, i])
 
-            print(f"[UniRigExtractSkeletonNew] Results: {len(all_joints)} joints, {len(edges)} edges")
+            log.info(f"Results: {len(all_joints)} joints, {len(edges)} edges")
 
             # Load preprocessing data
             # For mesh/texture: always use raw_data.npz (has texture data)
@@ -458,7 +435,7 @@ class UniRigExtractSkeletonNew:
 
             # Load mesh and texture data from preprocessing NPZ (raw_data.npz)
             if os.path.exists(preprocessing_npz):
-                print(f"[UniRigExtractSkeletonNew] Loading mesh/texture from: raw_data.npz")
+                log.info("Loading mesh/texture from: raw_data.npz")
                 preprocess_data = np.load(preprocessing_npz, allow_pickle=True)
 
                 # Helper to safely get array field (handles 0-d arrays from None values)
@@ -481,7 +458,7 @@ class UniRigExtractSkeletonNew:
                 if uv_coords_data is not None and len(uv_coords_data) > 0:
                     uv_coords = uv_coords_data
                     uv_faces = safe_get_array('uv_faces')
-                    print(f"[UniRigExtractSkeletonNew] Loaded UV coordinates: {len(uv_coords)} UVs")
+                    log.info(f"Loaded UV coordinates: {len(uv_coords)} UVs")
 
                 # Load material and texture info if available
                 mat_name = safe_get_array('material_name')
@@ -515,7 +492,7 @@ class UniRigExtractSkeletonNew:
                             h = preprocess_data['texture_height']
                             texture_height = int(h.item() if hasattr(h, 'item') and h.ndim == 0 else h)
 
-                        print(f"[UniRigExtractSkeletonNew] Loaded texture: {texture_width}x{texture_height} {texture_format} ({len(texture_data_base64) // 1024}KB base64)")
+                        log.info(f"Loaded texture: {texture_width}x{texture_height} {texture_format} ({len(texture_data_base64) // 1024}KB base64)")
 
                 # Close npz file to release handle (required for Windows temp cleanup)
                 preprocess_data.close()
@@ -536,9 +513,9 @@ class UniRigExtractSkeletonNew:
             # Normalize mesh vertices to [-1, 1]
             mesh_vertices = (mesh_vertices_original - mesh_center) / mesh_scale
 
-            print(f"[UniRigExtractSkeletonNew] Original mesh bounds: min={mesh_bounds_min}, max={mesh_bounds_max}")
-            print(f"[UniRigExtractSkeletonNew] Mesh scale: {mesh_scale:.4f}, extents: {mesh_extents}")
-            print(f"[UniRigExtractSkeletonNew] Normalized mesh bounds: min={mesh_vertices.min(axis=0)}, max={mesh_vertices.max(axis=0)}")
+            log.info("Original mesh bounds: min=%s, max=%s", mesh_bounds_min, mesh_bounds_max)
+            log.info("Mesh scale: %.4f, extents: %s", mesh_scale, mesh_extents)
+            log.info(f"Normalized mesh bounds: min={mesh_vertices.min(axis=0)}, max={mesh_vertices.max(axis=0)}")
 
             # Create trimesh object from normalized mesh data
             normalized_mesh = Trimesh(
@@ -546,7 +523,7 @@ class UniRigExtractSkeletonNew:
                 faces=mesh_faces,
                 process=True
             )
-            print(f"[UniRigExtractSkeletonNew] Created normalized mesh: {len(mesh_vertices)} vertices, {len(mesh_faces)} faces")
+            log.info(f"Created normalized mesh: {len(mesh_vertices)} vertices, {len(mesh_faces)} faces")
 
             # Build parents list from bone_parents
             if skeleton_bone_parents is not None:
@@ -562,12 +539,12 @@ class UniRigExtractSkeletonNew:
                         names_list = [str(name) for name in skeleton_bone_names]
                     else:
                         names_list = [f"bone_{i}" for i in range(num_bones)]
-                    print(f"[UniRigExtractSkeletonNew] [OK] Using {len(names_list)} model-generated bone names")
+                    log.info(f"[OK] Using {len(names_list)} model-generated bone names")
                     # Debug: show first few bone names to diagnose naming issues
-                    print(f"[UniRigExtractSkeletonNew] First 5 bone names: {names_list[:5]}")
+                    log.info(f"First 5 bone names: {names_list[:5]}")
                 else:
                     names_list = [f"bone_{i}" for i in range(num_bones)]
-                    print(f"[UniRigExtractSkeletonNew] Using {len(names_list)} generic bone names (model returned no names)")
+                    log.info(f"Using {len(names_list)} generic bone names (model returned no names)")
 
                 # Map bones to their head joint positions
                 if skeleton_bone_to_head is not None:
@@ -619,12 +596,12 @@ class UniRigExtractSkeletonNew:
                     else:
                         remapped_names.append(name)  # Keep original if not in map
                 names_list = remapped_names
-                print(f"[UniRigExtractSkeletonNew] Remapped {remapped_count}/{len(names_list)} bones to Mixamo naming")
-                print(f"[UniRigExtractSkeletonNew] First 5 names after remap: {names_list[:5]}")
+                log.info(f"Remapped {remapped_count}/{len(names_list)} bones to Mixamo naming")
+                log.info(f"First 5 names after remap: {names_list[:5]}")
 
             # Convert to SMPL skeleton if requested (filter 52 VRoid bones to 22 SMPL joints)
             if remap_to_smpl:
-                print(f"[UniRigExtractSkeletonNew] Converting to SMPL skeleton (22 joints)...")
+                log.info("Converting to SMPL skeleton (22 joints)...")
 
                 # Build VRoid name -> index mapping from current skeleton
                 vroid_name_to_idx = {name: i for i, name in enumerate(names_list)}
@@ -650,7 +627,7 @@ class UniRigExtractSkeletonNew:
                         smpl_joints.append(np.array([0, 0, 0]))
 
                 if missing_joints:
-                    print(f"[UniRigExtractSkeletonNew] Warning: Missing VRoid bones for SMPL joints: {missing_joints}")
+                    log.warning("Warning: Missing VRoid bones for SMPL joints: %s", missing_joints)
 
                 # Replace with SMPL data
                 bone_joints = np.array(smpl_joints)
@@ -681,7 +658,7 @@ class UniRigExtractSkeletonNew:
                     # Tail = head + direction * length
                     tails[i] = bone_joints[i] + direction * bone_length
 
-                print(f"[UniRigExtractSkeletonNew] Converted to SMPL: {len(names_list)} joints with canonical bone orientations")
+                log.info(f"Converted to SMPL: {len(names_list)} joints with canonical bone orientations")
 
                 # === STEP 1: Detect current facing direction and rotate to SMPL standard ===
                 # SMPL standard (before Y-up conversion): facing -Y, lateral along X, up along Z
@@ -710,7 +687,7 @@ class UniRigExtractSkeletonNew:
                 forward_vec = np.cross(shoulder_vec, spine_vec)
                 forward_vec = forward_vec / (np.linalg.norm(forward_vec) + 1e-8)
 
-                print(f"[UniRigExtractSkeletonNew] Current orientation - Lateral: {shoulder_vec}, Up: {spine_vec}, Forward: {forward_vec}")
+                log.info("Current orientation - Lateral: %s, Up: %s, Forward: %s", shoulder_vec, spine_vec, forward_vec)
 
                 # Determine which axis is lateral (should be X for SMPL)
                 # In Blender Z-up, SMPL standard is: lateral=X, up=Z, forward=-Y
@@ -720,17 +697,17 @@ class UniRigExtractSkeletonNew:
                 # Check if we need to rotate around Z axis to align lateral with X
                 if lateral_axis == 0:
                     # Already aligned with X
-                    print(f"[UniRigExtractSkeletonNew] Lateral axis already aligned with X")
+                    log.info("Lateral axis already aligned with X")
                     z_rotation_angle = 0
                 elif lateral_axis == 1:
                     # Lateral is along Y, need to rotate 90 degrees around Z
                     z_rotation_angle = np.pi / 2 if shoulder_vec[1] > 0 else -np.pi / 2
-                    print(f"[UniRigExtractSkeletonNew] Rotating {np.degrees(z_rotation_angle):.0f} degrees around Z to align lateral with X")
+                    log.info(f"Rotating {np.degrees(z_rotation_angle):.0f} degrees around Z to align lateral with X")
                 else:
                     # Lateral is along Z (our current case), need to rotate around up axis
                     # This shouldn't happen in Z-up Blender coords, but handle it
                     z_rotation_angle = 0
-                    print(f"[UniRigExtractSkeletonNew] Unusual: Lateral along Z axis")
+                    log.info("Unusual: Lateral along Z axis")
 
                 # For the current mesh: lateral is along Y (in original coords), up is along Z
                 # After Z-up to Y-up conversion, this becomes: lateral along Y, up along Y - wrong!
@@ -752,7 +729,7 @@ class UniRigExtractSkeletonNew:
                         rotated[..., 2] = points[..., 2]
                         return rotated
 
-                    print(f"[UniRigExtractSkeletonNew] Rotating 90 degrees around Z to align shoulders with X axis")
+                    log.info("Rotating 90 degrees around Z to align shoulders with X axis")
                     bone_joints = rotate_around_z(bone_joints)
                     tails = rotate_around_z(tails)
                     mesh_vertices = rotate_around_z(mesh_vertices)
@@ -786,7 +763,7 @@ class UniRigExtractSkeletonNew:
                 # In SMPL, L_Shoulder should have positive X, R_Shoulder negative X
                 if l_shoulder_new[0] < r_shoulder_new[0]:
                     # Left/Right are swapped, need to mirror along X
-                    print(f"[UniRigExtractSkeletonNew] Mirroring along X to fix left/right")
+                    log.info("Mirroring along X to fix left/right")
                     bone_joints[..., 0] = -bone_joints[..., 0]
                     tails[..., 0] = -tails[..., 0]
                     mesh_vertices[..., 0] = -mesh_vertices[..., 0]
@@ -800,7 +777,7 @@ class UniRigExtractSkeletonNew:
                 mesh_bounds_max = mesh_vertices.max(axis=0)
                 mesh_center = (mesh_bounds_min + mesh_bounds_max) / 2
 
-                print(f"[UniRigExtractSkeletonNew] Rotated to SMPL Y-up coordinate system")
+                log.info("Rotated to SMPL Y-up coordinate system")
 
             # Save as RawData NPZ for skinning phase
             persistent_npz = os.path.join(folder_paths.get_temp_directory(), f"skeleton_{seed}.npz")
@@ -828,7 +805,7 @@ class UniRigExtractSkeletonNew:
                 path=None,
                 cls=cls_value
             )
-            print(f"[UniRigExtractSkeletonNew] Saved skeleton NPZ to: {persistent_npz}")
+            log.info("Saved skeleton NPZ to: %s", persistent_npz)
 
             # Build skeleton dict with ALL data
             skeleton = {
@@ -867,21 +844,21 @@ class UniRigExtractSkeletonNew:
             # Note: skeleton_data NPZ file was already closed immediately after extraction
             # to avoid Windows file locking issues during temp cleanup
 
-            print(f"[UniRigExtractSkeletonNew] Included hierarchy: {len(names_list)} bones with parent relationships")
+            log.info(f"Included hierarchy: {len(names_list)} bones with parent relationships")
 
             # Create texture preview output
             if texture_data_base64:
                 texture_preview, tex_w, tex_h = decode_texture_to_comfy_image(texture_data_base64)
                 if texture_preview is not None:
-                    print(f"[UniRigExtractSkeletonNew] Texture preview created: {tex_w}x{tex_h}")
+                    log.info("Texture preview created: %sx%s", tex_w, tex_h)
                 else:
-                    print(f"[UniRigExtractSkeletonNew] Warning: Could not decode texture for preview")
+                    log.warning("Warning: Could not decode texture for preview")
                     texture_preview = create_placeholder_texture()
             else:
-                print(f"[UniRigExtractSkeletonNew] No texture available for preview")
+                log.info("No texture available for preview")
                 texture_preview = create_placeholder_texture()
 
             total_time = time.time() - total_start
-            print(f"[UniRigExtractSkeletonNew] Skeleton extraction complete!")
-            print(f"[UniRigExtractSkeletonNew] TOTAL TIME: {total_time:.2f}s")
+            log.info("Skeleton extraction complete!")
+            log.info("TOTAL TIME: %.2fs", total_time)
             return (normalized_mesh, skeleton, texture_preview)

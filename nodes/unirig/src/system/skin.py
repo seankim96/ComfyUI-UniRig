@@ -21,7 +21,9 @@ from ..data.order import OrderConfig, get_order
 from ..data.raw_data import RawSkin, RawData
 from ..data.exporter import Exporter
 from ..model.spec import ModelSpec
+import logging
 
+log = logging.getLogger("unirig")
 def _get_item(x):
     if isinstance(x, Tensor):
         return x.item()
@@ -83,7 +85,7 @@ class SkinSystem(L.LightningModule):
 
         # Only remap if there's a mismatch
         if checkpoint_has_flash_attn and not model_has_flash_attn:
-            print("[SkinSystem] Checkpoint uses flash_attn but model doesn't - remapping keys...")
+            log.info("Checkpoint uses flash_attn but model doesn't - remapping keys...")
             new_state_dict = {}
 
             for key, value in state_dict.items():
@@ -96,10 +98,10 @@ class SkinSystem(L.LightningModule):
 
             checkpoint['state_dict'] = new_state_dict
             remapped_count = len([k for k in state_dict.keys() if '.attention.attn.' in k])
-            print(f"[SkinSystem] Remapped {remapped_count} keys to match non-flash_attn model structure")
+            log.info("Remapped %s keys to match non-flash_attn model structure", remapped_count)
 
         elif not checkpoint_has_flash_attn and model_has_flash_attn:
-            print("[SkinSystem] Checkpoint doesn't use flash_attn but model does - remapping keys...")
+            log.info("Checkpoint doesn't use flash_attn but model does - remapping keys...")
             new_state_dict = {}
 
             for key, value in state_dict.items():
@@ -112,13 +114,13 @@ class SkinSystem(L.LightningModule):
 
             checkpoint['state_dict'] = new_state_dict
             remapped_count = len([k for k in state_dict.keys() if '.attention.Wq' in k or '.attention.Wkv' in k or '.attention.out_proj' in k])
-            print(f"[SkinSystem] Remapped {remapped_count} keys to match flash_attn model structure")
+            log.info("Remapped %s keys to match flash_attn model structure", remapped_count)
 
         else:
             if checkpoint_has_flash_attn and model_has_flash_attn:
-                print("[SkinSystem] Both checkpoint and model use flash_attn - no remapping needed")
+                log.info("Both checkpoint and model use flash_attn - no remapping needed")
             else:
-                print("[SkinSystem] Both checkpoint and model use standard attention - no remapping needed")
+                log.info("Both checkpoint and model use standard attention - no remapping needed")
 
     def on_validation_batch_start(self, batch, batch_idx: int, dataloader_idx: int = 0):
         if self.record_res:
@@ -357,7 +359,7 @@ class SkinWriter(BasePredictionWriter):
                             if 'uv_coords' in npz_data and len(npz_data['uv_coords']) > 0:
                                 uv_coords = npz_data['uv_coords']
                                 uv_faces = npz_data.get('uv_faces', None)
-                                print(f"[SkinSystem] Loaded UV coordinates: {len(uv_coords)} UVs")
+                                log.info(f"Loaded UV coordinates: {len(uv_coords)} UVs")
                             # Load texture data if available
                             if 'texture_data_base64' in npz_data:
                                 tex_data = npz_data['texture_data_base64']
@@ -365,9 +367,9 @@ class SkinWriter(BasePredictionWriter):
                                     texture_data_base64 = str(tex_data)
                                     texture_format = str(npz_data.get('texture_format', 'PNG'))
                                     material_name = str(npz_data.get('material_name', 'Material'))
-                                    print(f"[SkinSystem] Loaded texture: {texture_format} ({len(texture_data_base64) // 1024}KB base64)")
+                                    log.info(f"Loaded texture: {texture_format} ({len(texture_data_base64) // 1024}KB base64)")
                     except Exception as uv_err:
-                        print(f"[SkinSystem] Could not load UV/texture data: {uv_err}")
+                        log.info("Could not load UV/texture data: %s", uv_err)
 
                     if self.user_mode:
                         if self.output_name is not None:
@@ -396,7 +398,7 @@ class SkinWriter(BasePredictionWriter):
                         # do_not_normalize=True,
                     )
                 except Exception as e:
-                    print(str(e))
+                    log.error("%s", e)
     
     def write_on_epoch_end(self, trainer, pl_module, predictions, batch_indices):
         self._epoch += 1

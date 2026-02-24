@@ -10,7 +10,9 @@ import trimesh
 from .spec import ConfigSpec
 from .asset import Asset
 from .utils import axis_angle_to_matrix
+import logging
 
+log = logging.getLogger("unirig")
 @dataclass(frozen=True)
 class AugmentDropPartConfig(ConfigSpec):
     # probability
@@ -163,7 +165,7 @@ class AugmentLinearConfig(ConfigSpec):
         if config is None:
             return None
         if config.get('random_flip_x_p', 0) > 0 or config.get('random_flip_y_p', 0) > 0 or config.get('random_flip_z_p', 0) > 0:
-            print("\033[31mWARNING: random flip is enabled and is very likely to confuse ar model !\033[0m")
+            log.warning("WARNING: random flip is enabled and is very likely to confuse ar model !")
         cls.check_keys(config)
         return AugmentLinearConfig(
             random_rotate_p=config.get('random_rotate_p', 0.),

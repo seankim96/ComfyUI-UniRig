@@ -10,7 +10,10 @@ import numpy as np
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 from safetensors.torch import load_file as load_safetensors
+import logging
+import comfy.model_management
 
+log = logging.getLogger("unirig")
 # Global model cache
 _MODEL_CACHE: Dict[str, Any] = {}
 
@@ -110,9 +113,7 @@ def normalize_vertices(vertices: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]
 
 def _get_device():
     """Get the best available device."""
-    if torch.cuda.is_available():
-        return torch.device('cuda')
-    return torch.device('cpu')
+    return comfy.model_management.get_torch_device()
 
 
 def _load_skeleton_model(checkpoint_path: str, device: Optional[torch.device] = None):
@@ -126,20 +127,18 @@ def _load_skeleton_model(checkpoint_path: str, device: Optional[torch.device] = 
     Returns:
         Loaded model ready for inference
     """
-    import sys
     import os
     from pathlib import Path
-
-    # Add unirig to path if needed
-    unirig_path = Path(__file__).parents[2]
-    if str(unirig_path) not in sys.path:
-        sys.path.insert(0, str(unirig_path))
-
     from box import Box
     import yaml
+    from ..tokenizer.parse import get_tokenizer
+    from ..tokenizer.spec import TokenizerConfig
+    from ..model.parse import get_model
 
     if device is None:
         device = _get_device()
+
+    unirig_path = Path(__file__).parents[2]
 
     # Change to unirig directory so relative config paths resolve correctly
     # (configs reference paths like ./configs/skeleton/vroid.yaml)
@@ -157,19 +156,16 @@ def _load_skeleton_model(checkpoint_path: str, device: Optional[torch.device] = 
             tokenizer_config = Box(yaml.safe_load(f))
 
         # Create tokenizer
-        from src.tokenizer.parse import get_tokenizer
-        from src.tokenizer.spec import TokenizerConfig
         tokenizer = get_tokenizer(config=TokenizerConfig.parse(config=tokenizer_config))
 
         # Create model
-        from src.model.parse import get_model
         model = get_model(tokenizer=tokenizer, **model_config)
     finally:
         # Restore original working directory
         os.chdir(original_cwd)
 
     # Load weights from safetensors
-    print(f"[UniRig Direct] Loading skeleton weights from {checkpoint_path}")
+    log.info("Loading skeleton weights from %s", checkpoint_path)
     state_dict = load_safetensors(checkpoint_path)
 
     # Remove 'model.' prefix if present
@@ -182,7 +178,7 @@ def _load_skeleton_model(checkpoint_path: str, device: Optional[torch.device] = 
     model = model.to(device)
     model.eval()
 
-    print(f"[UniRig Direct] Skeleton model loaded on {device}")
+    log.info("Skeleton model loaded on %s", device)
     return model, tokenizer
 
 
@@ -197,20 +193,16 @@ def _load_skin_model(checkpoint_path: str, device: Optional[torch.device] = None
     Returns:
         Loaded model ready for inference
     """
-    import sys
     import os
     from pathlib import Path
-
-    # Add unirig to path if needed
-    unirig_path = Path(__file__).parents[2]
-    if str(unirig_path) not in sys.path:
-        sys.path.insert(0, str(unirig_path))
-
     from box import Box
     import yaml
+    from ..model.parse import get_model
 
     if device is None:
         device = _get_device()
+
+    unirig_path = Path(__file__).parents[2]
 
     # Change to unirig directory so relative config paths resolve correctly
     original_cwd = os.getcwd()
@@ -224,14 +216,13 @@ def _load_skin_model(checkpoint_path: str, device: Optional[torch.device] = None
             model_config = Box(yaml.safe_load(f))
 
         # Create model
-        from src.model.parse import get_model
         model = get_model(tokenizer=None, **model_config)
     finally:
         # Restore original working directory
         os.chdir(original_cwd)
 
     # Load weights from safetensors
-    print(f"[UniRig Direct] Loading skin weights from {checkpoint_path}")
+    log.info("Loading skin weights from %s", checkpoint_path)
     state_dict = load_safetensors(checkpoint_path)
 
     # Remove 'model.' prefix if present
@@ -245,7 +236,7 @@ def _load_skin_model(checkpoint_path: str, device: Optional[torch.device] = None
         model.load_state_dict(cleaned_state_dict, strict=True)
     except RuntimeError as e:
         if 'attention.attn.Wq' in str(e):
-            print("[UniRig Direct] Remapping attention keys for compatibility...")
+            log.info("Remapping attention keys for compatibility...")
             remapped_dict = {}
             for k, v in cleaned_state_dict.items():
                 new_key = k
@@ -262,7 +253,7 @@ def _load_skin_model(checkpoint_path: str, device: Optional[torch.device] = None
     model = model.to(device)
     model.eval()
 
-    print(f"[UniRig Direct] Skin model loaded on {device}")
+    log.info("Skin model loaded on %s", device)
     return model
 
 
@@ -286,8 +277,7 @@ def clear_model_cache():
     """Clear all cached models to free memory."""
     global _MODEL_CACHE
     _MODEL_CACHE.clear()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    comfy.model_management.soft_empty_cache()
 
 
 @torch.no_grad()
@@ -406,15 +396,9 @@ def predict_skinning(
     # Compute voxel_skin if faces provided
     if faces is not None:
         # Import voxelization functions
-        import sys
-        from pathlib import Path
-        unirig_path = Path(__file__).parents[2]
-        if str(unirig_path) not in sys.path:
-            sys.path.insert(0, str(unirig_path))
+        from ..data.vertex_group import voxelization, voxel_skin
 
-        from src.data.vertex_group import voxelization, voxel_skin
-
-        print(f"[UniRig Direct] Computing voxel_skin (grid={voxel_grid_size})...")
+        log.info("Computing voxel_skin (grid=%s)...", voxel_grid_size)
 
         # Voxelize the mesh
         grid_coords = voxelization(
@@ -438,7 +422,7 @@ def predict_skinning(
             grid_weight=3.0,
         )
         voxel_skin_weights = np.nan_to_num(voxel_skin_weights, nan=0., posinf=0., neginf=0.)
-        print(f"[UniRig Direct] voxel_skin shape: {voxel_skin_weights.shape}")
+        log.info("voxel_skin shape: %s", voxel_skin_weights.shape)
     else:
         # Fallback: zero voxel_skin
         voxel_skin_weights = np.zeros((num_joints, num_vertices), dtype=np.float32)
@@ -570,7 +554,7 @@ def rig_mesh(
     )
 
     # 3. Predict skeleton
-    print("[UniRig Direct] Predicting skeleton...")
+    log.info("Predicting skeleton...")
     skeleton = predict_skeleton(
         vertices=sampled_points,
         normals=sampled_normals,
@@ -583,7 +567,7 @@ def rig_mesh(
         raise RuntimeError("Skeleton prediction failed - no joints generated")
 
     # 4. Predict skinning weights
-    print("[UniRig Direct] Predicting skinning weights...")
+    log.info("Predicting skinning weights...")
     skin_weights = predict_skinning(
         vertices=sampled_points,
         normals=sampled_normals,

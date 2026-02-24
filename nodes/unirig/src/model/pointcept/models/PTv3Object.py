@@ -17,7 +17,9 @@ except ImportError:
 from .utils.misc import offset2bincount
 from .utils.structure import Point
 from .modules import PointModule, PointSequential
+import logging
 
+log = logging.getLogger("unirig")
 
 class RPE(torch.nn.Module):
     def __init__(self, patch_size, num_heads):
@@ -91,10 +93,10 @@ class SerializedAttention(PointModule):
         if enable_qknorm:
             self.qknorm = QueryKeyNorm(channels, num_heads)
         else:
-            print("WARNING: enable_qknorm is False in PTv3Object and training may be fragile")
+            log.warning("WARNING: enable_qknorm is False in PTv3Object and training may be fragile")
         # Graceful fallback if flash_attn is not available
         if enable_flash and flash_attn is None:
-            print("[UniRig] flash_attn not available for PTv3Object, falling back to standard PyTorch attention")
+            log.info("flash_attn not available for PTv3Object, falling back to standard PyTorch attention")
             enable_flash = False
             self.enable_flash = False  # Fix: Update instance variable too
 
@@ -591,7 +593,7 @@ class PointTransformerV3Object(PointModule):
         if layer_norm:
             bn_layer = partial(nn.LayerNorm)
         else:
-            print("WARNING: use BatchNorm in ptv3obj !!!")
+            log.warning("WARNING: use BatchNorm in ptv3obj !!!")
             bn_layer = partial(nn.BatchNorm1d, eps=1e-3, momentum=0.01)
         ln_layer = nn.LayerNorm
         # activation layers
@@ -658,7 +660,7 @@ class PointTransformerV3Object(PointModule):
 def get_encoder(pretrained_path: Union[str, None]=None, freeze_encoder: bool=False, **kwargs) -> PointTransformerV3Object:
     point_encoder = PointTransformerV3Object(**kwargs)
     if pretrained_path is not None:
-        checkpoint = torch.load(pretrained_path)
+        checkpoint = torch.load(pretrained_path, map_location="cpu", weights_only=True)
         state_dict = checkpoint["state_dict"]
         state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
         point_encoder.load_state_dict(state_dict, strict=False)

@@ -8,7 +8,9 @@ import pickle
 import tempfile
 
 import trimesh
+import logging
 
+log = logging.getLogger("unirig")
 class Exporter():
     
     def _safe_make_dir(self, path):
@@ -118,7 +120,7 @@ class Exporter():
     def _export_pc(self, vertices: ndarray, path: str, vertex_normals: Union[ndarray, None]=None, normal_size: float=0.01):
         if path.endswith('.ply'):
             if vertex_normals is not None:
-                print("normal result will not be displayed in .ply format")
+                log.info("normal result will not be displayed in .ply format")
             name = path.removesuffix('.ply')
             path = name + ".ply"
             pc = trimesh.PointCloud(vertices=vertices)
@@ -279,8 +281,8 @@ class Exporter():
             'do_not_normalize': bool(do_not_normalize),
         }
 
-        print(f"[Exporter] Prepared FBX export data (all numpy types converted to Python native types)")
-        print(f"[Exporter] Data summary: joints={len(data['joints']) if data['joints'] else 0}, "
+        log.info("Prepared FBX export data (all numpy types converted to Python native types)")
+        log.info(f"Data summary: joints={len(data['joints']) if data['joints'] else 0}, "
               f"vertices={len(data['vertices']) if data['vertices'] else 0}, "
               f"faces={len(data['faces']) if data['faces'] else 0}")
 
@@ -289,7 +291,7 @@ class Exporter():
             pickle_path = f.name
             pickle.dump(data, f)
 
-        print(f"[Exporter] Saved pickle data to: {pickle_path}")
+        log.info("Saved pickle data to: %s", pickle_path)
 
         try:
             # Build command
@@ -314,35 +316,35 @@ class Exporter():
             cmd.append(f'--extrude_size={extrude_size}')
 
             # Run Blender
-            print(f"[Exporter] Running Blender FBX export to: {path}")
-            print(f"[Exporter] Blender command: {' '.join(cmd[:3])} ... {cmd[-2:]}")
+            log.info("Running Blender FBX export to: %s", path)
+            log.info(f"Blender command: {' '.join(cmd[:3])} ... {cmd[-2:]}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, encoding='utf-8', errors='replace')
 
             # Always print output for debugging
             if result.stdout:
-                print(f"[Exporter] Blender stdout:\n{result.stdout}")
+                log.info("Blender stdout:\n%s", result.stdout)
             if result.stderr:
-                print(f"[Exporter] Blender stderr:\n{result.stderr}")
+                log.info("Blender stderr:\n%s", result.stderr)
 
             if result.returncode != 0:
                 raise RuntimeError(f"FBX export failed with return code {result.returncode}")
 
-            print(f"[Exporter] Blender completed with return code: {result.returncode}")
+            log.info("Blender completed with return code: %s", result.returncode)
 
             # Check if output file was created
             if not os.path.exists(path):
-                print(f"[Exporter] ERROR: Output file not found: {path}")
-                print(f"[Exporter] Pickle input was: {pickle_path}")
-                print(f"[Exporter] Wrapper script: {wrapper_script}")
+                log.error("ERROR: Output file not found: %s", path)
+                log.info("Pickle input was: %s", pickle_path)
+                log.info("Wrapper script: %s", wrapper_script)
                 raise RuntimeError(f"FBX export completed but output file not found: {path}")
             else:
                 file_size = os.path.getsize(path)
-                print(f"[Exporter] [OK] FBX export successful: {path} ({file_size} bytes)")
+                log.info("[OK] FBX export successful: %s (%s bytes)", path, file_size)
 
         finally:
             # Clean up pickle file
             if os.path.exists(pickle_path):
-                print(f"[Exporter] Cleaning up temporary pickle file: {pickle_path}")
+                log.info("Cleaning up temporary pickle file: %s", pickle_path)
                 os.unlink(pickle_path)
     
     def _export_render(

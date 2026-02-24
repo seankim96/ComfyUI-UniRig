@@ -1,7 +1,9 @@
 import os
 from pathlib import Path
 from huggingface_hub import hf_hub_download
+import logging
 
+log = logging.getLogger("unirig")
 # Get models directory from environment or use default
 def _get_models_dir() -> Path:
     """Get the UniRig models directory."""
@@ -28,7 +30,7 @@ def download(ckpt_name: str) -> str:
 
     try:
         if ckpt_name not in MAP:
-            print(f"[UniRig] Unknown checkpoint: {ckpt_name}")
+            log.info("Unknown checkpoint: %s", ckpt_name)
             return ckpt_name
 
         filename = MAP[ckpt_name]
@@ -37,14 +39,14 @@ def download(ckpt_name: str) -> str:
 
         # Check if already exists
         if local_path.exists():
-            print(f"[UniRig] Found model: {local_path}")
+            log.info("Found model: %s", local_path)
             return str(local_path)
 
         # Create directory if needed
         models_dir.mkdir(parents=True, exist_ok=True)
 
         # Download directly to models folder
-        print(f"[UniRig] Downloading {filename} from apozz/UniRig-safetensors...")
+        log.info("Downloading %s from apozz/UniRig-safetensors...", filename)
         hf_hub_download(
             repo_id='apozz/UniRig-safetensors',
             filename=filename,
@@ -52,9 +54,9 @@ def download(ckpt_name: str) -> str:
             local_dir_use_symlinks=False,
         )
 
-        print(f"[UniRig] Downloaded to: {local_path}")
+        log.info("Downloaded to: %s", local_path)
         return str(local_path)
 
     except Exception as e:
-        print(f"[UniRig] Failed to download {ckpt_name}: {e}")
+        log.info("Failed to download %s: %s", ckpt_name, e)
         return ckpt_name

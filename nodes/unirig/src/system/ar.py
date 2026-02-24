@@ -19,7 +19,9 @@ from ..data.raw_data import RawData
 from ..data.order import OrderConfig, get_order
 from ..model.spec import ModelSpec
 from ..tokenizer.spec import DetokenizeOutput
+import logging
 
+log = logging.getLogger("unirig")
 class ARSystem(L.LightningModule):
     
     def __init__(
@@ -137,7 +139,7 @@ class ARSystem(L.LightningModule):
             else:
                 prediction: List[DetokenizeOutput] = self._predict_step(batch=batch, batch_idx=batch_idx, dataloader_idx=dataloader_idx)
         except Exception as e:
-            print(str(e))
+            log.error("%s", e)
             self._validation_loss[f"val_{cls}_fail"].append(B)
             return
         for (id, res) in enumerate(prediction):
@@ -229,7 +231,7 @@ class ARSystem(L.LightningModule):
             prediction: List[DetokenizeOutput] = self._predict_step(batch=batch, batch_idx=batch_idx, dataloader_idx=dataloader_idx)
             return prediction
         except Exception as e:
-            print(str(e))
+            log.error("%s", e)
             return []
     
     def configure_optimizers(self) -> Dict:
@@ -274,7 +276,7 @@ class ARWriter(BasePredictionWriter):
         
     def on_predict_end(self, trainer, pl_module):
         if self._epoch < self.repeat - 1:
-            print(f"Finished prediction run {self._epoch + 1}/{self.repeat}, starting next run...")
+            log.info("Finished prediction run %s/%s, starting next run...", self._epoch + 1, self.repeat)
             self._epoch += 1
             trainer.predict_dataloader = trainer.datamodule.predict_dataloader()
             trainer.predict_loop.run()
@@ -342,7 +344,7 @@ class ARWriter(BasePredictionWriter):
             )
 
             if not self.user_mode and self.export_npz is not None:
-                print(make_path(self.export_npz, 'npz'))
+                log.info("%s", make_path(self.export_npz, 'npz'))
                 raw_data.save(path=make_path(self.export_npz, 'npz'))
             if not self.user_mode and self.export_obj is not None:
                 raw_data.export_skeleton(path=make_path(self.export_obj, 'obj'))

@@ -1,11 +1,10 @@
 """UniRig Nodes."""
 
 from .mesh_io import UniRigLoadMesh, UniRigSaveMesh
-from .load_model import UniRigLoadModel
+from .load_model import UniRigLoadModel, MIALoadModel
 from .auto_rig import UniRigAutoRig
 from .skeleton_extraction import UniRigExtractSkeletonNew
 from .skinning import UniRigApplySkinningMLNew
-from .mia_model_loader import MIALoadModel
 from .mia_auto_rig import MIAAutoRig
 from .animation import UniRigApplyAnimation
 from .skeleton_io import (
@@ -16,7 +15,6 @@ from .skeleton_io import (
     UniRigDebugSkeleton,
     UniRigCompareSkeletons,
 )
-from .rest_pose_node import UniRigExtractRestPose
 from .orientation_check import UniRigOrientationCheck
 
 NODE_CLASS_MAPPINGS = {
@@ -35,7 +33,6 @@ NODE_CLASS_MAPPINGS = {
     "UniRigViewRigging": UniRigViewRigging,
     "UniRigDebugSkeleton": UniRigDebugSkeleton,
     "UniRigCompareSkeletons": UniRigCompareSkeletons,
-    "UniRigExtractRestPose": UniRigExtractRestPose,
     "UniRigOrientationCheck": UniRigOrientationCheck,
 }
 
@@ -55,6 +52,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "UniRigViewRigging": "UniRig: View Rigging",
     "UniRigDebugSkeleton": "UniRig: Debug Skeleton",
     "UniRigCompareSkeletons": "UniRig: Compare Skeletons",
-    "UniRigExtractRestPose": "UniRig: Extract Rest Pose",
     "UniRigOrientationCheck": "UniRig: Orientation Check",
 }

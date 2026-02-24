@@ -3,19 +3,22 @@ Direct inference for UniRig models - no subprocess, no Lightning Trainer.
 
 This module provides simple Python functions to run inference directly,
 keeping models loaded in memory for fast repeated inference.
+
+Uses ComfyUI ModelPatcher for proper memory management.
 """
 
 import torch
 import numpy as np
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
-from safetensors.torch import load_file as load_safetensors
 import logging
 import comfy.model_management
+import comfy.model_patcher
+import comfy.utils
 
 log = logging.getLogger("unirig")
-# Global model cache
-_MODEL_CACHE: Dict[str, Any] = {}
+# Shared model cache from load_model.py (single source of truth)
+from ....load_model import _MODEL_CACHE
 
 
 def sample_mesh_surface(
@@ -116,16 +119,19 @@ def _get_device():
     return comfy.model_management.get_torch_device()
 
 
-def _load_skeleton_model(checkpoint_path: str, device: Optional[torch.device] = None):
+def _load_skeleton_model(checkpoint_path: str, dtype=None, attn_backend: str = "auto"):
     """
     Load the skeleton (AR) model directly.
 
+    Uses meta device for zero-memory init, comfy.utils for safe loading.
+
     Args:
         checkpoint_path: Path to skeleton.safetensors
-        device: Device to load model on (default: auto-detect)
+        dtype: Model precision (torch.bfloat16, torch.float16, etc.)
+        attn_backend: Attention backend ('auto', 'flash_attn', 'sdpa')
 
     Returns:
-        Loaded model ready for inference
+        (model, tokenizer) tuple - model on CPU with requested dtype
     """
     import os
     from pathlib import Path
@@ -134,19 +140,24 @@ def _load_skeleton_model(checkpoint_path: str, device: Optional[torch.device] = 
     from ..tokenizer.parse import get_tokenizer
     from ..tokenizer.spec import TokenizerConfig
     from ..model.parse import get_model
+    from ..model import unirig_ar
 
-    if device is None:
-        device = _get_device()
+    # Override attention backend before model creation
+    if attn_backend == "sdpa":
+        unirig_ar.FLASH_ATTN_AVAILABLE = False
+        log.info("Attention backend: sdpa (flash_attn disabled)")
+    elif attn_backend == "flash_attn":
+        if not unirig_ar.FLASH_ATTN_AVAILABLE:
+            raise RuntimeError("flash_attn requested but not installed")
+        log.info("Attention backend: flash_attn")
+    else:
+        log.info("Attention backend: auto (flash_attn=%s)", unirig_ar.FLASH_ATTN_AVAILABLE)
 
     unirig_path = Path(__file__).parents[2]
-
-    # Change to unirig directory so relative config paths resolve correctly
-    # (configs reference paths like ./configs/skeleton/vroid.yaml)
     original_cwd = os.getcwd()
     os.chdir(unirig_path)
 
     try:
-        # Load configs
         config_dir = unirig_path / 'configs'
 
         with open(config_dir / 'model' / 'unirig_ar_350m_1024_81920_float32.yaml') as f:
@@ -155,18 +166,17 @@ def _load_skeleton_model(checkpoint_path: str, device: Optional[torch.device] = 
         with open(config_dir / 'tokenizer' / 'tokenizer_parts_articulationxl_256.yaml') as f:
             tokenizer_config = Box(yaml.safe_load(f))
 
-        # Create tokenizer
         tokenizer = get_tokenizer(config=TokenizerConfig.parse(config=tokenizer_config))
 
-        # Create model
-        model = get_model(tokenizer=tokenizer, **model_config)
+        # Build model on meta device (zero memory, no random init)
+        with torch.device("meta"):
+            model = get_model(tokenizer=tokenizer, **model_config)
     finally:
-        # Restore original working directory
         os.chdir(original_cwd)
 
-    # Load weights from safetensors
+    # Load weights with comfy.utils (safe, memory-efficient)
     log.info("Loading skeleton weights from %s", checkpoint_path)
-    state_dict = load_safetensors(checkpoint_path)
+    state_dict = comfy.utils.load_torch_file(checkpoint_path)
 
     # Remove 'model.' prefix if present
     cleaned_state_dict = {}
@@ -174,56 +184,69 @@ def _load_skeleton_model(checkpoint_path: str, device: Optional[torch.device] = 
         new_key = k[6:] if k.startswith('model.') else k
         cleaned_state_dict[new_key] = v
 
-    model.load_state_dict(cleaned_state_dict, strict=True)
-    model = model.to(device)
+    # assign=True for meta device -> direct weight assignment
+    model.load_state_dict(cleaned_state_dict, strict=True, assign=True)
     model.eval()
 
-    log.info("Skeleton model loaded on %s", device)
+    if dtype is not None:
+        model = model.to(dtype=dtype)
+        log.info("Skeleton model dtype: %s", dtype)
+
+    log.info("Skeleton model ready (on CPU, will be moved to GPU by ModelPatcher)")
     return model, tokenizer
 
 
-def _load_skin_model(checkpoint_path: str, device: Optional[torch.device] = None):
+def _load_skin_model(checkpoint_path: str, dtype=None, attn_backend: str = "auto"):
     """
     Load the skinning model directly.
 
+    Uses meta device for zero-memory init, comfy.utils for safe loading.
+
     Args:
         checkpoint_path: Path to skin.safetensors
-        device: Device to load model on (default: auto-detect)
+        dtype: Model precision (torch.bfloat16, torch.float16, etc.)
+        attn_backend: Attention backend ('auto', 'flash_attn', 'sdpa')
 
     Returns:
-        Loaded model ready for inference
+        Loaded model on CPU with requested dtype
     """
     import os
     from pathlib import Path
     from box import Box
     import yaml
     from ..model.parse import get_model
+    from ..model import unirig_skin
 
-    if device is None:
-        device = _get_device()
+    # Override attention backend before model creation
+    if attn_backend == "sdpa":
+        unirig_skin.FLASH_ATTN_AVAILABLE = False
+        log.info("Skin attention backend: sdpa (flash_attn disabled)")
+    elif attn_backend == "flash_attn":
+        if not unirig_skin.FLASH_ATTN_AVAILABLE:
+            raise RuntimeError("flash_attn requested but not installed")
+        log.info("Skin attention backend: flash_attn")
+    else:
+        log.info("Skin attention backend: auto (flash_attn=%s)", unirig_skin.FLASH_ATTN_AVAILABLE)
 
     unirig_path = Path(__file__).parents[2]
-
-    # Change to unirig directory so relative config paths resolve correctly
     original_cwd = os.getcwd()
     os.chdir(unirig_path)
 
     try:
-        # Load config
         config_dir = unirig_path / 'configs'
 
         with open(config_dir / 'model' / 'unirig_skin.yaml') as f:
             model_config = Box(yaml.safe_load(f))
 
-        # Create model
-        model = get_model(tokenizer=None, **model_config)
+        # Build model on meta device (zero memory, no random init)
+        with torch.device("meta"):
+            model = get_model(tokenizer=None, **model_config)
     finally:
-        # Restore original working directory
         os.chdir(original_cwd)
 
-    # Load weights from safetensors
+    # Load weights with comfy.utils (safe, memory-efficient)
     log.info("Loading skin weights from %s", checkpoint_path)
-    state_dict = load_safetensors(checkpoint_path)
+    state_dict = comfy.utils.load_torch_file(checkpoint_path)
 
     # Remove 'model.' prefix if present
     cleaned_state_dict = {}
@@ -231,9 +254,9 @@ def _load_skin_model(checkpoint_path: str, device: Optional[torch.device] = None
         new_key = k[6:] if k.startswith('model.') else k
         cleaned_state_dict[new_key] = v
 
-    # Try loading, remap keys if needed (attention structure difference)
+    # Try loading with assign=True for meta device, remap keys if needed
     try:
-        model.load_state_dict(cleaned_state_dict, strict=True)
+        model.load_state_dict(cleaned_state_dict, strict=True, assign=True)
     except RuntimeError as e:
         if 'attention.attn.Wq' in str(e):
             log.info("Remapping attention keys for compatibility...")
@@ -246,38 +269,70 @@ def _load_skin_model(checkpoint_path: str, device: Optional[torch.device] = None
                     if old_pattern in new_key:
                         new_key = new_key.replace(old_pattern, new_pattern)
                 remapped_dict[new_key] = v
-            model.load_state_dict(remapped_dict, strict=True)
+            model.load_state_dict(remapped_dict, strict=True, assign=True)
         else:
             raise
 
-    model = model.to(device)
     model.eval()
 
-    log.info("Skin model loaded on %s", device)
+    if dtype is not None:
+        model = model.to(dtype=dtype)
+        log.info("Skin model dtype: %s", dtype)
+
+    log.info("Skin model ready (on CPU, will be moved to GPU by ModelPatcher)")
     return model
 
 
-def get_skeleton_model(checkpoint_path: str, device: Optional[torch.device] = None, force_reload: bool = False):
-    """Get or load cached skeleton model."""
+def get_skeleton_model(
+    checkpoint_path: str,
+    dtype=None,
+    attn_backend: str = "auto",
+    force_reload: bool = False,
+):
+    """Get or load cached skeleton model wrapped in ModelPatcher.
+
+    Returns:
+        (ModelPatcher, tokenizer) tuple
+    """
     cache_key = f"skeleton:{checkpoint_path}"
     if cache_key not in _MODEL_CACHE or force_reload:
-        _MODEL_CACHE[cache_key] = _load_skeleton_model(checkpoint_path, device)
+        model, tokenizer = _load_skeleton_model(
+            checkpoint_path, dtype=dtype, attn_backend=attn_backend
+        )
+        load_device = comfy.model_management.get_torch_device()
+        offload_device = torch.device("cpu")
+        patcher = comfy.model_patcher.ModelPatcher(
+            model, load_device=load_device, offload_device=offload_device
+        )
+        _MODEL_CACHE[cache_key] = (patcher, tokenizer)
+        log.info("Skeleton model cached with ModelPatcher (load=%s, offload=%s)", load_device, offload_device)
     return _MODEL_CACHE[cache_key]
 
 
-def get_skin_model(checkpoint_path: str, device: Optional[torch.device] = None, force_reload: bool = False):
-    """Get or load cached skin model."""
+def get_skin_model(
+    checkpoint_path: str,
+    dtype=None,
+    attn_backend: str = "auto",
+    force_reload: bool = False,
+):
+    """Get or load cached skin model wrapped in ModelPatcher.
+
+    Returns:
+        ModelPatcher instance
+    """
     cache_key = f"skin:{checkpoint_path}"
     if cache_key not in _MODEL_CACHE or force_reload:
-        _MODEL_CACHE[cache_key] = _load_skin_model(checkpoint_path, device)
+        model = _load_skin_model(
+            checkpoint_path, dtype=dtype, attn_backend=attn_backend
+        )
+        load_device = comfy.model_management.get_torch_device()
+        offload_device = torch.device("cpu")
+        patcher = comfy.model_patcher.ModelPatcher(
+            model, load_device=load_device, offload_device=offload_device
+        )
+        _MODEL_CACHE[cache_key] = patcher
+        log.info("Skin model cached with ModelPatcher (load=%s, offload=%s)", load_device, offload_device)
     return _MODEL_CACHE[cache_key]
-
-
-def clear_model_cache():
-    """Clear all cached models to free memory."""
-    global _MODEL_CACHE
-    _MODEL_CACHE.clear()
-    comfy.model_management.soft_empty_cache()
 
 
 @torch.no_grad()
@@ -287,11 +342,14 @@ def predict_skeleton(
     checkpoint_path: str,
     cls: str = "articulationxl",
     max_new_tokens: int = 2048,
-    device: Optional[torch.device] = None,
+    dtype=None,
+    attn_backend: str = "auto",
     **generate_kwargs,
 ) -> Dict[str, np.ndarray]:
     """
     Predict skeleton from mesh vertices and normals.
+
+    Uses ComfyUI ModelPatcher for GPU memory management.
 
     Args:
         vertices: Mesh vertices (N, 3), should be normalized to [-1, 1]
@@ -299,18 +357,22 @@ def predict_skeleton(
         checkpoint_path: Path to skeleton.safetensors
         cls: Class name for conditioning (default: "articulationxl")
         max_new_tokens: Maximum tokens to generate
-        device: Device to run on
+        dtype: Model precision (torch.bfloat16, torch.float16, etc.)
+        attn_backend: Attention backend ('auto', 'flash_attn', 'sdpa')
         **generate_kwargs: Additional kwargs for generation (num_beams, etc.)
 
     Returns:
         Dict with 'joints', 'parents', 'names' etc from detokenization
     """
-    if device is None:
-        device = _get_device()
+    patcher, tokenizer = get_skeleton_model(
+        checkpoint_path, dtype=dtype, attn_backend=attn_backend
+    )
 
-    model, tokenizer = get_skeleton_model(checkpoint_path, device)
+    # Let ComfyUI manage GPU memory
+    comfy.model_management.load_models_gpu([patcher])
+    device = patcher.load_device
 
-    # Convert to tensors
+    # Convert to tensors on the model's device
     vertices_t = torch.from_numpy(vertices).float().to(device)
     normals_t = torch.from_numpy(normals).float().to(device)
 
@@ -327,6 +389,7 @@ def predict_skeleton(
     default_kwargs.update(generate_kwargs)
 
     # Run generation
+    model = patcher.model
     result = model.generate(
         vertices=vertices_t,
         normals=normals_t,
@@ -361,10 +424,13 @@ def predict_skinning(
     faces: Optional[np.ndarray] = None,
     tails: Optional[np.ndarray] = None,
     voxel_grid_size: int = 196,
-    device: Optional[torch.device] = None,
+    dtype=None,
+    attn_backend: str = "auto",
 ) -> np.ndarray:
     """
     Predict skinning weights from mesh and skeleton.
+
+    Uses ComfyUI ModelPatcher for GPU memory management.
 
     Args:
         vertices: Mesh vertices (N, 3)
@@ -375,15 +441,19 @@ def predict_skinning(
         faces: Mesh faces (F, 3) - required for voxel_skin computation
         tails: Bone tail positions (J, 3) - if None, computed from joints
         voxel_grid_size: Grid size for voxel_skin (default 196)
-        device: Device to run on
+        dtype: Model precision (torch.bfloat16, torch.float16, etc.)
+        attn_backend: Attention backend ('auto', 'flash_attn', 'sdpa')
 
     Returns:
         Skinning weights (N, J)
     """
-    if device is None:
-        device = _get_device()
+    patcher = get_skin_model(
+        checkpoint_path, dtype=dtype, attn_backend=attn_backend
+    )
 
-    model = get_skin_model(checkpoint_path, device)
+    # Let ComfyUI manage GPU memory
+    comfy.model_management.load_models_gpu([patcher])
+    device = patcher.load_device
 
     num_joints = len(joints)
     num_vertices = len(vertices)
@@ -443,6 +513,7 @@ def predict_skinning(
     }
 
     # Run prediction
+    model = patcher.model
     result = model.predict_step(batch)
 
     # Extract skin weights - result is a list of tensors, one per batch
@@ -462,7 +533,8 @@ def predict_skeleton_from_mesh(
     cls: str = "articulationxl",
     max_new_tokens: int = 2048,
     seed: int = 42,
-    device: Optional[torch.device] = None,
+    dtype=None,
+    attn_backend: str = "auto",
 ) -> Tuple[Dict[str, np.ndarray], Dict[str, Any]]:
     """
     High-level function: predict skeleton from raw mesh.
@@ -477,7 +549,8 @@ def predict_skeleton_from_mesh(
         cls: Class name for conditioning
         max_new_tokens: Maximum tokens to generate
         seed: Random seed for sampling
-        device: Device to run on
+        dtype: Model precision (torch.bfloat16, torch.float16, etc.)
+        attn_backend: Attention backend ('auto', 'flash_attn', 'sdpa')
 
     Returns:
         Tuple of (skeleton_dict, normalization_params)
@@ -502,7 +575,8 @@ def predict_skeleton_from_mesh(
         checkpoint_path=skeleton_checkpoint,
         cls=cls,
         max_new_tokens=max_new_tokens,
-        device=device,
+        dtype=dtype,
+        attn_backend=attn_backend,
     )
 
     return skeleton, norm_params
@@ -517,7 +591,8 @@ def rig_mesh(
     num_samples: int = 2048,
     cls: str = "articulationxl",
     seed: int = 42,
-    device: Optional[torch.device] = None,
+    dtype=None,
+    attn_backend: str = "auto",
 ) -> Dict[str, Any]:
     """
     Complete rigging pipeline: mesh -> skeleton -> skinning weights.
@@ -530,7 +605,8 @@ def rig_mesh(
         num_samples: Number of surface points to sample
         cls: Class name for conditioning
         seed: Random seed
-        device: Device to run on
+        dtype: Model precision (torch.bfloat16, torch.float16, etc.)
+        attn_backend: Attention backend ('auto', 'flash_attn', 'sdpa')
 
     Returns:
         Dict with:
@@ -560,7 +636,8 @@ def rig_mesh(
         normals=sampled_normals,
         checkpoint_path=skeleton_checkpoint,
         cls=cls,
-        device=device,
+        dtype=dtype,
+        attn_backend=attn_backend,
     )
 
     if skeleton['joints'] is None:
@@ -574,7 +651,8 @@ def rig_mesh(
         joints=skeleton['joints'],
         parents=skeleton['parents'],
         checkpoint_path=skin_checkpoint,
-        device=device,
+        dtype=dtype,
+        attn_backend=attn_backend,
     )
 
     return {

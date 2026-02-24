@@ -82,6 +82,13 @@ class UniRigAutoRig:
         skeleton_model = model["skeleton_model"]
         skinning_model = model["skinning_model"]
 
+        # Propagate dtype and attn_backend if not already set
+        for sub_model in (skeleton_model, skinning_model):
+            if "dtype" not in sub_model:
+                sub_model["dtype"] = model.get("dtype")
+            if "attn_backend" not in sub_model:
+                sub_model["attn_backend"] = model.get("attn_backend", "auto")
+
         # Step 1: Extract skeleton
         log.info("Step 1/2: Extracting skeleton...")
         step_start = time.time()

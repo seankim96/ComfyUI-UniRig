@@ -113,35 +113,3 @@ def create_placeholder_texture(width: int = 256, height: int = 256, text: str = 
         log.error("Error creating placeholder: %s", e)
         # Return minimal gray image
         return torch.full((1, 64, 64, 3), 0.3)
-
-
-def normalize_skeleton(vertices: np.ndarray) -> tuple:
-    """
-    Normalize skeleton vertices to [-1, 1] range.
-
-    Args:
-        vertices: Array of vertex positions
-
-    Returns:
-        tuple: (normalized_vertices, normalization_params)
-            normalization_params contains 'center' and 'scale' for denormalization
-    """
-    min_coords = vertices.min(axis=0)
-    max_coords = vertices.max(axis=0)
-    center = (min_coords + max_coords) / 2
-    vertices_centered = vertices - center
-    scale = (max_coords - min_coords).max() / 2
-
-    if scale > 0:
-        vertices_normalized = vertices_centered / scale
-    else:
-        vertices_normalized = vertices_centered
-
-    normalization_params = {
-        'center': center,
-        'scale': scale,
-        'min_coords': min_coords,
-        'max_coords': max_coords
-    }
-
-    return vertices_normalized, normalization_params

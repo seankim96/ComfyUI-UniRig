@@ -64,8 +64,8 @@ MIA_MODEL_FILES = [
     "pose.pth",
 ]
 
-# Global cache for loaded models
-_MIA_MODEL_CACHE: Dict[str, Any] = {}
+# Shared model cache from load_model.py (single source of truth)
+from .load_model import _MODEL_CACHE
 
 
 def ensure_mia_models() -> bool:
@@ -122,11 +122,9 @@ def load_mia_models(cache_to_gpu: bool = True) -> str:
     """
     import torch  # Lazy import - loads torch_cluster via mia/ BEFORE bpy
 
-    global _MIA_MODEL_CACHE
-
     cache_key = f"mia_models_gpu={cache_to_gpu}"
 
-    if cache_key in _MIA_MODEL_CACHE:
+    if cache_key in _MODEL_CACHE:
         log.info("Using cached models")
         return cache_key  # Return key, not models
 
@@ -227,7 +225,7 @@ def load_mia_models(cache_to_gpu: bool = True) -> str:
         "geo_resample_ratio": geo_resample_ratio,
     }
 
-    _MIA_MODEL_CACHE[cache_key] = models
+    _MODEL_CACHE[cache_key] = models
     log.info("All models loaded successfully")
 
     return cache_key  # Return key, not models (models can't be pickled to host)
@@ -235,9 +233,9 @@ def load_mia_models(cache_to_gpu: bool = True) -> str:
 
 def get_cached_models(cache_key: str) -> Dict[str, Any]:
     """Get models from cache by key."""
-    if cache_key not in _MIA_MODEL_CACHE:
+    if cache_key not in _MODEL_CACHE:
         raise RuntimeError(f"Models not loaded: {cache_key}")
-    return _MIA_MODEL_CACHE[cache_key]
+    return _MODEL_CACHE[cache_key]
 
 
 def run_mia_inference(
@@ -900,10 +898,3 @@ def _export_mia_fbx_subprocess(
         "Please ensure bpy is available in your environment.\n"
         "The MIA nodes require running in the unirig isolated environment with bpy."
     )
-
-
-def clear_mia_cache():
-    """Clear the MIA model cache."""
-    global _MIA_MODEL_CACHE
-    _MIA_MODEL_CACHE.clear()
-    log.info("Model cache cleared")

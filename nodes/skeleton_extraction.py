@@ -381,6 +381,10 @@ class UniRigExtractSkeletonNew:
 
             log.info("Using checkpoint: %s", checkpoint_path)
 
+            # Extract dtype and attn_backend from model config (set by UniRigLoadModel)
+            model_dtype = skeleton_model.get("dtype")
+            model_attn_backend = skeleton_model.get("attn_backend", "auto")
+
             # Run direct skeleton prediction
             direct_skeleton_result, norm_params = direct_module.predict_skeleton_from_mesh(
                 vertices=mesh_vertices_raw,
@@ -390,6 +394,8 @@ class UniRigExtractSkeletonNew:
                 cls=cls_value or "articulationxl",
                 max_new_tokens=2048,
                 seed=seed,
+                dtype=model_dtype,
+                attn_backend=model_attn_backend,
             )
 
             inference_time = time.time() - step_start

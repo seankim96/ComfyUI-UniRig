@@ -268,6 +268,10 @@ class UniRigApplySkinningMLNew:
         log.info(f"Mesh: {len(mesh_vertices)} vertices, {len(mesh_faces)} faces")
         log.info(f"Skeleton: {len(joints)} joints")
 
+        # Extract dtype and attn_backend from model config (set by UniRigLoadModel)
+        model_dtype = skinning_model.get("dtype")
+        model_attn_backend = skinning_model.get("attn_backend", "auto")
+
         # Run direct skinning prediction
         skin_weights = direct_module.predict_skinning(
             vertices=mesh_vertices,
@@ -278,6 +282,8 @@ class UniRigApplySkinningMLNew:
             faces=mesh_faces,
             tails=tails,
             voxel_grid_size=voxel_grid_size_val,
+            dtype=model_dtype,
+            attn_backend=model_attn_backend,
         )
 
         inference_time = time.time() - step_start

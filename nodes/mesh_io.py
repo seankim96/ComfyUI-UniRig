@@ -16,7 +16,7 @@ try:
     import folder_paths
     COMFYUI_INPUT_FOLDER = folder_paths.get_input_directory()
     COMFYUI_OUTPUT_FOLDER = folder_paths.get_output_directory()
-except:
+except Exception as e:
     # Fallback if folder_paths not available (e.g., during testing)
     COMFYUI_INPUT_FOLDER = None
     COMFYUI_OUTPUT_FOLDER = None
@@ -26,7 +26,9 @@ try:
     from .base import LIB_DIR
 except ImportError:
     from base import LIB_DIR
+import logging
 
+log = logging.getLogger("unirig")
 
 def load_fbx_with_blender(file_path: str) -> Tuple[Optional[trimesh.Trimesh], str]:
     """
@@ -63,81 +65,81 @@ def load_mesh_file(file_path: str) -> Tuple[Optional[trimesh.Trimesh], str]:
     # Check file extension - FBX requires Blender (use os.path for Windows compatibility)
     _, ext = os.path.splitext(file_path)
     ext = ext.lower()
-    print(f"[UniRigLoadMesh] File extension detected: '{ext}'")
+    log.info("File extension detected: '%s'", ext)
 
     if ext == '.fbx':
-        print(f"[UniRigLoadMesh] Detected FBX file, using Blender loader")
+        log.info("Detected FBX file, using Blender loader")
         return load_fbx_with_blender(file_path)
 
     try:
-        print(f"[UniRigLoadMesh] Loading: {file_path}")
+        log.info("Loading: %s", file_path)
 
         # Try to load with trimesh first (supports many formats)
         # Do NOT use force='mesh' as it can lose visual/texture data during Scene-to-mesh conversion
         # Use process=False and maintain_order=True to preserve mesh.visual (textures/materials)
         loaded = trimesh.load(file_path, process=False, maintain_order=True)
 
-        print(f"[UniRigLoadMesh] Loaded type: {type(loaded).__name__}")
+        log.info(f"Loaded type: {type(loaded).__name__}")
 
         # Debug: Check visual data immediately after load
         if isinstance(loaded, trimesh.Scene):
-            print(f"[UniRigLoadMesh] Scene has {len(loaded.geometry)} geometries")
+            log.info(f"Scene has {len(loaded.geometry)} geometries")
             for name, geom in loaded.geometry.items():
                 if hasattr(geom, 'visual'):
-                    print(f"[UniRigLoadMesh]   Geometry '{name}': visual type = {type(geom.visual).__name__}")
+                    log.info(f"Geometry '{name}': visual type = {type(geom.visual).__name__}")
                     if hasattr(geom.visual, 'material'):
                         mat = geom.visual.material
-                        print(f"[UniRigLoadMesh]     Material: {type(mat).__name__}")
+                        log.info(f"Material: {type(mat).__name__}")
                         if hasattr(mat, 'baseColorTexture') and mat.baseColorTexture is not None:
-                            print(f"[UniRigLoadMesh]     Has baseColorTexture: {mat.baseColorTexture.shape if hasattr(mat.baseColorTexture, 'shape') else 'yes'}")
+                            log.info(f"Has baseColorTexture: {mat.baseColorTexture.shape if hasattr(mat.baseColorTexture, 'shape') else 'yes'}")
                         if hasattr(mat, 'image') and mat.image is not None:
-                            print(f"[UniRigLoadMesh]     Has image: {mat.image.size if hasattr(mat.image, 'size') else 'yes'}")
+                            log.info(f"Has image: {mat.image.size if hasattr(mat.image, 'size') else 'yes'}")
         else:
             if hasattr(loaded, 'visual'):
-                print(f"[UniRigLoadMesh] Mesh visual type: {type(loaded.visual).__name__}")
+                log.info(f"Mesh visual type: {type(loaded.visual).__name__}")
                 if hasattr(loaded.visual, 'material'):
                     mat = loaded.visual.material
-                    print(f"[UniRigLoadMesh]   Material: {type(mat).__name__}")
+                    log.info(f"Material: {type(mat).__name__}")
 
         # Handle case where trimesh.load returns a Scene instead of a mesh
         if isinstance(loaded, trimesh.Scene):
-            print(f"[UniRigLoadMesh] Converting Scene to single mesh (scene has {len(loaded.geometry)} geometries)")
+            log.info(f"Converting Scene to single mesh (scene has {len(loaded.geometry)} geometries)")
             # Use dump with concatenate=True to merge geometries while preserving visual data
             mesh = loaded.dump(concatenate=True)
-            print(f"[UniRigLoadMesh] After dump(): visual type = {type(mesh.visual).__name__ if hasattr(mesh, 'visual') else 'None'}")
+            log.info(f"After dump(): visual type = {type(mesh.visual).__name__ if hasattr(mesh, 'visual') else 'None'}")
             if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'material'):
-                print(f"[UniRigLoadMesh] After dump(): material = {type(mesh.visual.material).__name__}")
+                log.info(f"After dump(): material = {type(mesh.visual.material).__name__}")
         else:
             mesh = loaded
 
         if mesh is None or len(mesh.vertices) == 0 or len(mesh.faces) == 0:
             return None, f"Failed to read mesh or mesh is empty: {file_path}"
 
-        print(f"[UniRigLoadMesh] Initial mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
+        log.info(f"Initial mesh: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
 
         # Debug: Check visual after initial processing
         if hasattr(mesh, 'visual'):
-            print(f"[UniRigLoadMesh] Visual type: {type(mesh.visual).__name__}")
+            log.info(f"Visual type: {type(mesh.visual).__name__}")
             if hasattr(mesh.visual, 'uv') and mesh.visual.uv is not None:
-                print(f"[UniRigLoadMesh]   Has UV coords: {mesh.visual.uv.shape}")
+                log.info("Has UV coords: %s", mesh.visual.uv.shape)
             if hasattr(mesh.visual, 'material') and mesh.visual.material is not None:
                 mat = mesh.visual.material
-                print(f"[UniRigLoadMesh]   Material type: {type(mat).__name__}")
+                log.info(f"Material type: {type(mat).__name__}")
                 if hasattr(mat, 'baseColorTexture') and mat.baseColorTexture is not None:
-                    print(f"[UniRigLoadMesh]   Has baseColorTexture!")
+                    log.info("Has baseColorTexture!")
                 if hasattr(mat, 'image') and mat.image is not None:
-                    print(f"[UniRigLoadMesh]   Has image texture!")
+                    log.info("Has image texture!")
         else:
-            print(f"[UniRigLoadMesh] WARNING: No visual attribute on mesh!")
+            log.warning("WARNING: No visual attribute on mesh!")
 
         # Ensure mesh is properly triangulated
         if hasattr(mesh, 'faces') and len(mesh.faces) > 0:
             # Check if faces are triangular
             if mesh.faces.shape[1] != 3:
-                print(f"[UniRigLoadMesh] Warning: Mesh has non-triangular faces, triangulating...")
+                log.warning("Warning: Mesh has non-triangular faces, triangulating...")
                 # Use process=False to preserve mesh.visual (textures/materials)
                 mesh = trimesh.Trimesh(vertices=mesh.vertices, faces=mesh.faces, process=False, maintain_order=True)
-                print(f"[UniRigLoadMesh] After triangulation: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
+                log.info(f"After triangulation: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
 
         # Count before cleanup
         verts_before = len(mesh.vertices)
@@ -158,26 +160,26 @@ def load_mesh_file(file_path: str) -> Tuple[Optional[trimesh.Trimesh], str]:
         faces_after = len(mesh.faces)
 
         if verts_before != verts_after or faces_before != faces_after:
-            print(f"[UniRigLoadMesh] Cleanup: {verts_before}->{verts_after} vertices, {faces_before}->{faces_after} faces")
-            print(f"[UniRigLoadMesh]   Removed: {verts_before - verts_after} duplicate vertices, {faces_before - faces_after} bad faces")
+            log.info("Cleanup: %s->%s vertices, %s->%s faces", verts_before, verts_after, faces_before, faces_after)
+            log.info("Removed: %s duplicate vertices, %s bad faces", verts_before - verts_after, faces_before - faces_after)
 
         # Store file metadata
         mesh.metadata['file_path'] = file_path
         mesh.metadata['file_name'] = os.path.basename(file_path)
         mesh.metadata['file_format'] = os.path.splitext(file_path)[1].lower()
 
-        print(f"[UniRigLoadMesh] Successfully loaded: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
+        log.info(f"Successfully loaded: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
         return mesh, ""
 
     except Exception as e:
-        print(f"[UniRigLoadMesh] Trimesh failed: {str(e)}, trying libigl fallback...")
+        log.info(f"Trimesh failed: {str(e)}, trying libigl fallback...")
         # Fallback to libigl
         try:
             v, f = igl.read_triangle_mesh(file_path)
             if v is None or f is None or len(v) == 0 or len(f) == 0:
                 return None, f"Failed to read mesh: {file_path}"
 
-            print(f"[UniRigLoadMesh] libigl loaded: {len(v)} vertices, {len(f)} faces")
+            log.info(f"libigl loaded: {len(v)} vertices, {len(f)} faces")
 
             # Use process=False to preserve mesh.visual (textures/materials)
             mesh = trimesh.Trimesh(vertices=v, faces=f, process=False, maintain_order=True)
@@ -199,17 +201,17 @@ def load_mesh_file(file_path: str) -> Tuple[Optional[trimesh.Trimesh], str]:
             faces_after = len(mesh.faces)
 
             if verts_before != verts_after or faces_before != faces_after:
-                print(f"[UniRigLoadMesh] Cleanup: {verts_before}->{verts_after} vertices, {faces_before}->{faces_after} faces")
+                log.info("Cleanup: %s->%s vertices, %s->%s faces", verts_before, verts_after, faces_before, faces_after)
 
             # Store metadata
             mesh.metadata['file_path'] = file_path
             mesh.metadata['file_name'] = os.path.basename(file_path)
             mesh.metadata['file_format'] = os.path.splitext(file_path)[1].lower()
 
-            print(f"[UniRigLoadMesh] Successfully loaded via libigl: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
+            log.info(f"Successfully loaded via libigl: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
             return mesh, ""
         except Exception as e2:
-            print(f"[UniRigLoadMesh] Both loaders failed!")
+            log.info("Both loaders failed!")
             return None, f"Error loading mesh: {str(e)}; Fallback error: {str(e2)}"
 
 
@@ -368,7 +370,7 @@ class UniRigLoadMesh:
             searched_paths.append(input_3d_path)
             if os.path.exists(input_3d_path):
                 full_path = input_3d_path
-                print(f"[UniRigLoadMesh] Found mesh in input/3d folder: {file_path}")
+                log.info("Found mesh in input/3d folder: %s", file_path)
 
             # Second, try in ComfyUI input folder
             if full_path is None:
@@ -376,21 +378,21 @@ class UniRigLoadMesh:
                 searched_paths.append(input_path)
                 if os.path.exists(input_path):
                     full_path = input_path
-                    print(f"[UniRigLoadMesh] Found mesh in input folder: {file_path}")
+                    log.info("Found mesh in input folder: %s", file_path)
 
         elif source_folder == "output" and COMFYUI_OUTPUT_FOLDER is not None:
             output_path = os.path.join(COMFYUI_OUTPUT_FOLDER, file_path)
             searched_paths.append(output_path)
             if os.path.exists(output_path):
                 full_path = output_path
-                print(f"[UniRigLoadMesh] Found mesh in output folder: {file_path}")
+                log.info("Found mesh in output folder: %s", file_path)
 
         # If not found in source folder, try as absolute path
         if full_path is None:
             searched_paths.append(file_path)
             if os.path.exists(file_path):
                 full_path = file_path
-                print(f"[UniRigLoadMesh] Loading from absolute path: {file_path}")
+                log.info("Loading from absolute path: %s", file_path)
             else:
                 # Generate error message with all searched paths
                 error_msg = f"File not found: '{file_path}'\nSearched in:"
@@ -404,7 +406,7 @@ class UniRigLoadMesh:
         if loaded_mesh is None:
             raise ValueError(f"Failed to load mesh: {error}")
 
-        print(f"[UniRigLoadMesh] Loaded: {len(loaded_mesh.vertices)} vertices, {len(loaded_mesh.faces)} faces")
+        log.info(f"Loaded: {len(loaded_mesh.vertices)} vertices, {len(loaded_mesh.faces)} faces")
 
         return (loaded_mesh,)
 
@@ -450,7 +452,7 @@ class UniRigSaveMesh:
             raise ValueError("File path cannot be empty")
 
         # Debug: Check what we received
-        print(f"[UniRigSaveMesh] Received mesh type: {type(trimesh)}")
+        log.info(f"Received mesh type: {type(trimesh)}")
         if trimesh is None:
             raise ValueError("Cannot save mesh: received None instead of a mesh object. Check that the previous node is outputting a mesh.")
 
@@ -458,7 +460,7 @@ class UniRigSaveMesh:
         try:
             vertex_count = len(trimesh.vertices) if hasattr(trimesh, 'vertices') else 0
             face_count = len(trimesh.faces) if hasattr(trimesh, 'faces') else 0
-            print(f"[UniRigSaveMesh] Mesh has {vertex_count} vertices, {face_count} faces")
+            log.info("Mesh has %s vertices, %s faces", vertex_count, face_count)
 
             if vertex_count == 0 or face_count == 0:
                 raise ValueError(
@@ -474,9 +476,9 @@ class UniRigSaveMesh:
         # If path is relative and we have output folder, use it
         if not os.path.isabs(file_path) and COMFYUI_OUTPUT_FOLDER is not None:
             full_path = os.path.join(COMFYUI_OUTPUT_FOLDER, file_path)
-            print(f"[UniRigSaveMesh] Saving to output folder: {file_path}")
+            log.info("Saving to output folder: %s", file_path)
         else:
-            print(f"[UniRigSaveMesh] Saving to: {file_path}")
+            log.info("Saving to: %s", file_path)
 
         # Save the mesh
         success, error = save_mesh_file(trimesh, full_path)
@@ -488,6 +490,6 @@ class UniRigSaveMesh:
         status += f"  Vertices: {len(trimesh.vertices)}\n"
         status += f"  Faces: {len(trimesh.faces)}"
 
-        print(f"[UniRigSaveMesh] {status}")
+        log.info("%s", status)
 
         return (status,)

@@ -3,62 +3,32 @@ Skeleton I/O nodes for UniRig - Save, Load, and Preview operations.
 """
 
 import os
-import subprocess
-import tempfile
 import numpy as np
 import time
 import shutil
 import pickle
 import json
 import folder_paths
+import logging
 
-MESH_INFO_TIMEOUT = 30  # seconds
+log = logging.getLogger("unirig")
 
 try:
-    from .base import (
-        BLENDER_PARSE_SKELETON,
-        BLENDER_EXTRACT_MESH_INFO,
-        NODE_DIR,
-        LIB_DIR,
-    )
+    from .base import NODE_DIR
 except ImportError:
-    from base import (
-        BLENDER_PARSE_SKELETON,
-        BLENDER_EXTRACT_MESH_INFO,
-        NODE_DIR,
-        LIB_DIR,
-    )
-
-# Blender executable no longer used - set to None for backwards compatibility
-BLENDER_EXE = None
-
+    from base import NODE_DIR
 
 # Direct bone debug extraction module (bpy as Python module)
-_DIRECT_BONE_DEBUG_MODULE = None
+try:
+    from .unirig import direct_extract_bone_debug as _direct_bone_debug_module
+except Exception as e:
+    log.debug("Direct bone debug not available: %s", e)
+    _direct_bone_debug_module = None
 
 
 def _get_direct_bone_debug():
     """Get the direct bone debug extraction module for in-process extraction using bpy."""
-    global _DIRECT_BONE_DEBUG_MODULE
-    if _DIRECT_BONE_DEBUG_MODULE is None:
-        debug_path = os.path.join(LIB_DIR, "unirig", "src", "inference", "direct_extract_bone_debug.py")
-        if os.path.exists(debug_path):
-            try:
-                import importlib.util
-                spec = importlib.util.spec_from_file_location("unirig_direct_bone_debug", debug_path)
-                _DIRECT_BONE_DEBUG_MODULE = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(_DIRECT_BONE_DEBUG_MODULE)
-                print(f"[UniRig] Loaded direct bone debug module from {debug_path}")
-            except ImportError as e:
-                print(f"[UniRig] Direct bone debug not available (bpy not installed): {e}")
-                _DIRECT_BONE_DEBUG_MODULE = False
-            except Exception as e:
-                print(f"[UniRig] Warning: Could not load direct bone debug module: {e}")
-                _DIRECT_BONE_DEBUG_MODULE = False
-        else:
-            print(f"[UniRig] Warning: Direct bone debug module not found at {debug_path}")
-            _DIRECT_BONE_DEBUG_MODULE = False
-    return _DIRECT_BONE_DEBUG_MODULE if _DIRECT_BONE_DEBUG_MODULE else None
+    return _direct_bone_debug_module
 
 
 class UniRigLoadRiggedMesh:
@@ -120,7 +90,7 @@ class UniRigLoadRiggedMesh:
 
     def load(self, fbx_file):
         """Load an FBX file and return its filename in output directory."""
-        print(f"[UniRigLoadRiggedMesh] Loading FBX file: {fbx_file}")
+        log.info("Loading FBX file: %s", fbx_file)
 
         if not fbx_file:
             raise RuntimeError("No FBX file specified. Please select or upload an FBX file.")
@@ -147,125 +117,67 @@ class UniRigLoadRiggedMesh:
             output_filename = f"loaded_{int(time.time())}_{os.path.basename(fbx_file)}"
             final_output_path = os.path.join(output_dir, output_filename)
             shutil.copy(fbx_path, final_output_path)
-            print(f"[UniRigLoadRiggedMesh] Copied from input to output: {output_filename}")
+            log.info("Copied from input to output: %s", output_filename)
         else:
             output_filename = fbx_file
             final_output_path = output_path
-            print(f"[UniRigLoadRiggedMesh] Using existing file from output: {output_filename}")
+            log.info("Using existing file from output: %s", output_filename)
 
-        # Extract mesh info with Blender (using original path for analysis)
-        temp_dir = folder_paths.get_temp_directory()
+        # Extract mesh info using bpy
         mesh_info = {}
         try:
-            blender_exe = os.environ.get('UNIRIG_BLENDER_EXECUTABLE', BLENDER_EXE)
+            import bpy
+            bpy.ops.wm.read_factory_settings(use_empty=True)
+            bpy.ops.import_scene.fbx(filepath=fbx_path)
 
-            if blender_exe and os.path.exists(blender_exe):
-                mesh_npz = os.path.join(temp_dir, f"mesh_info_{int(time.time())}.npz")
+            mesh_objects = [obj for obj in bpy.data.objects if obj.type == 'MESH']
+            total_vertices = sum(len(obj.data.vertices) for obj in mesh_objects)
+            total_faces = sum(len(obj.data.polygons) for obj in mesh_objects)
 
-                cmd = [
-                    blender_exe,
-                    "--background",
-                    "--python", BLENDER_EXTRACT_MESH_INFO,
-                    "--",
-                    fbx_path,
-                    mesh_npz
-                ]
-
-                print(f"[UniRigLoadRiggedMesh] Extracting mesh info with Blender...")
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=MESH_INFO_TIMEOUT, encoding='utf-8', errors='replace')
-
-                if os.path.exists(mesh_npz):
-                    data = np.load(mesh_npz, allow_pickle=True)
-
-                    total_vertices = int(data.get('total_vertices', 0))
-                    total_faces = int(data.get('total_faces', 0))
-                    mesh_count = int(data.get('mesh_count', 0))
-                    bbox_min = data.get('bbox_min', np.array([0, 0, 0]))
-                    bbox_max = data.get('bbox_max', np.array([0, 0, 0]))
-                    extents = data.get('extents', np.array([0, 0, 0]))
-
-                    mesh_info = {
-                        "type": "Scene" if mesh_count > 1 else "Mesh",
-                        "mesh_count": mesh_count,
-                        "total_vertices": total_vertices,
-                        "total_faces": total_faces,
-                        "bbox_min": bbox_min.tolist(),
-                        "bbox_max": bbox_max.tolist(),
-                        "extents": extents.tolist()
-                    }
-
-                    # Close npz file before removing (required for Windows)
-                    data.close()
-                    os.remove(mesh_npz)
-
-                    print(f"[UniRigLoadRiggedMesh] Mesh: {mesh_count} objects, {total_vertices} verts, {total_faces} faces")
-                    print(f"[UniRigLoadRiggedMesh] Extents: {extents.tolist()}")
-                else:
-                    print(f"[UniRigLoadRiggedMesh] Mesh info extraction failed")
-                    mesh_info = {"type": "Unknown", "note": "Extraction failed"}
+            if mesh_objects:
+                import mathutils
+                all_verts = []
+                for obj in mesh_objects:
+                    for v in obj.data.vertices:
+                        all_verts.append(obj.matrix_world @ v.co)
+                all_verts = np.array(all_verts)
+                bbox_min = all_verts.min(axis=0).tolist()
+                bbox_max = all_verts.max(axis=0).tolist()
+                extents = (all_verts.max(axis=0) - all_verts.min(axis=0)).tolist()
             else:
-                print(f"[UniRigLoadRiggedMesh] Blender not available for mesh info")
-                mesh_info = {"type": "Unknown", "note": "Blender not available"}
+                bbox_min = bbox_max = extents = [0, 0, 0]
 
+            mesh_info = {
+                "type": "Scene" if len(mesh_objects) > 1 else "Mesh",
+                "mesh_count": len(mesh_objects),
+                "total_vertices": total_vertices,
+                "total_faces": total_faces,
+                "bbox_min": bbox_min,
+                "bbox_max": bbox_max,
+                "extents": extents,
+            }
+            log.info("Mesh: %s objects, %s verts, %s faces", len(mesh_objects), total_vertices, total_faces)
         except Exception as e:
-            print(f"[UniRigLoadRiggedMesh] Could not parse mesh geometry: {e}")
+            log.info("Could not parse mesh geometry: %s", e)
             mesh_info = {"type": "Unknown", "error": str(e)}
 
-        # Parse FBX with Blender to get skeleton info
+        # Extract skeleton info using bpy
         skeleton_info = {}
         try:
-            blender_exe = os.environ.get('UNIRIG_BLENDER_EXECUTABLE', BLENDER_EXE)
-
-            if blender_exe and os.path.exists(blender_exe):
-                skeleton_npz = os.path.join(temp_dir, f"skeleton_info_{int(time.time())}.npz")
-
-                cmd = [
-                    blender_exe,
-                    "--background",
-                    "--python", BLENDER_PARSE_SKELETON,
-                    "--",
-                    fbx_path,
-                    skeleton_npz
-                ]
-
-                print(f"[UniRigLoadRiggedMesh] Parsing skeleton with Blender...")
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=MESH_INFO_TIMEOUT, encoding='utf-8', errors='replace')
-
-                if os.path.exists(skeleton_npz):
-                    data = np.load(skeleton_npz, allow_pickle=True)
-
-                    num_bones = len(data.get('bone_names', []))
-                    bone_names = [str(name) for name in data.get('bone_names', [])]
-
-                    vertices = data.get('vertices', np.array([]))
-                    skeleton_extents = None
-                    if len(vertices) > 0:
-                        min_coords = vertices.min(axis=0)
-                        max_coords = vertices.max(axis=0)
-                        skeleton_extents = (max_coords - min_coords).tolist()
-
-                    skeleton_info = {
-                        "num_bones": num_bones,
-                        "bone_names": bone_names[:10],
-                        "has_skeleton": num_bones > 0,
-                        "skeleton_extents": skeleton_extents
-                    }
-
-                    # Close npz file before removing (required for Windows)
-                    data.close()
-                    os.remove(skeleton_npz)
-
-                    print(f"[UniRigLoadRiggedMesh] Found {num_bones} bones")
-                    if skeleton_extents:
-                        print(f"[UniRigLoadRiggedMesh] Skeleton extents: {skeleton_extents}")
-                else:
-                    skeleton_info = {"has_skeleton": False, "note": "No armature found"}
-                    print(f"[UniRigLoadRiggedMesh] No skeleton data found")
+            armatures = [obj for obj in bpy.data.objects if obj.type == 'ARMATURE']
+            if armatures:
+                arm = armatures[0]
+                bone_names = [b.name for b in arm.data.bones]
+                skeleton_info = {
+                    "num_bones": len(bone_names),
+                    "bone_names": bone_names[:10],
+                    "has_skeleton": True,
+                }
+                log.info("Found %s bones", len(bone_names))
             else:
-                skeleton_info = {"has_skeleton": "unknown", "note": "Blender not available"}
-
+                skeleton_info = {"has_skeleton": False, "note": "No armature found"}
         except Exception as e:
-            print(f"[UniRigLoadRiggedMesh] Could not parse skeleton: {e}")
+            log.info("Could not parse skeleton: %s", e)
             skeleton_info = {"has_skeleton": "unknown", "error": str(e)}
 
         # Create info string
@@ -308,8 +220,8 @@ class UniRigLoadRiggedMesh:
 
         info_string = "\n".join(info_lines)
 
-        print(f"[UniRigLoadRiggedMesh] Loaded successfully")
-        print(info_string)
+        log.info("Loaded successfully")
+        log.info("%s", info_string)
 
         return (final_output_path, info_string)
 
@@ -339,7 +251,7 @@ class UniRigPreviewRiggedMesh:
 
     def preview(self, fbx_output_path):
         """Preview the rigged mesh in an interactive FBX viewer."""
-        print(f"[UniRigPreviewRiggedMesh] Preparing preview...")
+        log.info("Preparing preview...")
 
         # FBX should already be in output directory
         output_dir = folder_paths.get_output_directory()
@@ -348,15 +260,15 @@ class UniRigPreviewRiggedMesh:
         if not os.path.exists(fbx_path):
             raise RuntimeError(f"FBX file not found in output directory: {fbx_output_path}")
 
-        print(f"[UniRigPreviewRiggedMesh] FBX path: {fbx_path}")
+        log.info("FBX path: %s", fbx_path)
 
         # FBX is already in output, so viewer can access it directly
         # Assume all FBX files have skinning and skeleton
         has_skinning = True
         has_skeleton = True
 
-        print(f"[UniRigPreviewRiggedMesh] Has skinning: {has_skinning}")
-        print(f"[UniRigPreviewRiggedMesh] Has skeleton: {has_skeleton}")
+        log.info("Has skinning: %s", has_skinning)
+        log.info("Has skeleton: %s", has_skeleton)
 
         return {
             "ui": {
@@ -402,19 +314,19 @@ class UniRigExportPosedFBX:
 
     def export_posed_fbx(self, rigged_mesh, output_filename, bone_transforms_json="{}"):
         """Export rigged mesh with custom pose to FBX using bpy directly."""
-        print(f"[UniRigExportPosedFBX] Exporting posed FBX...")
+        log.info("Exporting posed FBX...")
 
         # Get original FBX path
         fbx_path = rigged_mesh.get("fbx_path")
         if not fbx_path or not os.path.exists(fbx_path):
             raise RuntimeError(f"Rigged mesh FBX not found: {fbx_path}")
 
-        print(f"[UniRigExportPosedFBX] Source FBX: {fbx_path}")
+        log.info("Source FBX: %s", fbx_path)
 
         # Parse bone transforms
         try:
             bone_transforms = json.loads(bone_transforms_json)
-            print(f"[UniRigExportPosedFBX] Loaded transforms for {len(bone_transforms)} bones")
+            log.info(f"Loaded transforms for {len(bone_transforms)} bones")
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON in bone_transforms_json: {e}")
 
@@ -437,7 +349,7 @@ class UniRigExportPosedFBX:
         if not os.path.exists(output_fbx_path):
             raise RuntimeError(f"Export completed but output file not found: {output_fbx_path}")
 
-        print(f"[UniRigExportPosedFBX] [OK] Successfully exported to: {output_fbx_path}")
+        log.info("[OK] Successfully exported to: %s", output_fbx_path)
 
         return (output_fbx_path,)
 
@@ -467,7 +379,7 @@ class UniRigViewRigging:
 
     def view_rigging(self, fbx_output_path):
         """View rigging debug information for the FBX file."""
-        print(f"[UniRigViewRigging] Preparing debug view...")
+        log.debug("Preparing debug view...")
 
         # FBX should already be in output directory
         output_dir = folder_paths.get_output_directory()
@@ -481,7 +393,7 @@ class UniRigViewRigging:
         if not os.path.exists(fbx_path):
             raise RuntimeError(f"FBX file not found: {fbx_output_path}")
 
-        print(f"[UniRigViewRigging] FBX path: {fbx_path}")
+        log.info("FBX path: %s", fbx_path)
 
         # Extract bone debug data using direct bpy module
         bone_debug_data = None
@@ -490,12 +402,12 @@ class UniRigViewRigging:
         if bone_debug_module:
             try:
                 bone_debug_data = bone_debug_module.extract_bone_debug(fbx_path)
-                print(f"[UniRigViewRigging] Extracted debug data for {bone_debug_data.get('bone_count', 0)} bones")
+                log.debug(f"Extracted debug data for {bone_debug_data.get('bone_count', 0)} bones")
             except Exception as e:
-                print(f"[UniRigViewRigging] Warning: Could not extract bone debug data: {e}")
+                log.warning("Warning: Could not extract bone debug data: %s", e)
                 bone_debug_data = {'error': str(e), 'bones': [], 'bone_count': 0}
         else:
-            print("[UniRigViewRigging] Warning: bpy module not available, bone debug data will be limited")
+            log.warning("Warning: bpy module not available, bone debug data will be limited")
             bone_debug_data = {'error': 'bpy module not available', 'bones': [], 'bone_count': 0}
 
         # Return data for the viewer widget
@@ -542,7 +454,7 @@ class UniRigDebugSkeleton:
 
     def debug_skeleton(self, fbx_path):
         """Open the FBX in the debug skeleton viewer."""
-        print(f"[UniRigDebugSkeleton] Preparing debug skeleton view...")
+        log.debug("Preparing debug skeleton view...")
 
         # Handle both relative paths and absolute paths
         output_dir = folder_paths.get_output_directory()
@@ -555,7 +467,7 @@ class UniRigDebugSkeleton:
         if not os.path.exists(full_path):
             raise RuntimeError(f"FBX file not found: {fbx_path}")
 
-        print(f"[UniRigDebugSkeleton] FBX path: {full_path}")
+        log.debug("FBX path: %s", full_path)
 
         # For the viewer, use relative path if in output, otherwise basename
         if os.path.isabs(fbx_path):
@@ -600,7 +512,7 @@ class UniRigCompareSkeletons:
 
     def compare_skeletons(self, fbx_path_left, fbx_path_right):
         """Open both FBX files in the comparison skeleton viewer."""
-        print(f"[UniRig Compare] Preparing skeleton comparison view...")
+        log.info("Preparing skeleton comparison view...")
 
         output_dir = folder_paths.get_output_directory()
 
@@ -622,8 +534,8 @@ class UniRigCompareSkeletons:
         if not os.path.exists(full_path_right):
             raise RuntimeError(f"Right FBX file not found: {fbx_path_right}")
 
-        print(f"[UniRig Compare] Left FBX: {full_path_left}")
-        print(f"[UniRig Compare] Right FBX: {full_path_right}")
+        log.info("Left FBX: %s", full_path_left)
+        log.info("Right FBX: %s", full_path_right)
 
         # For the viewer, use relative path if in output, otherwise basename
         if os.path.isabs(fbx_path_left):

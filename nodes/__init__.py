@@ -1,30 +1,19 @@
 """UniRig Nodes."""
 
-# Patch torch.nn.init to skip wasteful random weight initialization.
-# All models load checkpoint weights via load_state_dict() immediately after
-# construction, so the default kaiming/xavier/etc. init is pure overhead.
-# Safe: this file only runs inside the comfy-env isolated subprocess.
-import torch.nn.init as _init
-
-def _noop(tensor, *args, **kwargs):
-    return tensor
-
-for _fn in (
-    "kaiming_uniform_", "kaiming_normal_",
-    "xavier_uniform_", "xavier_normal_",
-    "uniform_", "normal_", "trunc_normal_",
-    "ones_", "zeros_", "constant_",
-    "orthogonal_",
-):
-    if hasattr(_init, _fn):
-        setattr(_init, _fn, _noop)
+import pathlib
+import comfy_sparse_attn
+from comfy_sparse_attn import setup_link
+_PKG = pathlib.Path(comfy_sparse_attn.__file__).parent
+setup_link(_PKG / "sparse.py",           "sparse.py")
+setup_link(_PKG / "ops_sparse.py",       "ops_sparse.py")
+setup_link(_PKG / "attention_sparse.py", "attention_sparse.py")
+del pathlib, comfy_sparse_attn, setup_link, _PKG
 
 from .mesh_io import UniRigLoadMesh, UniRigSaveMesh
-from .model_loaders import UniRigLoadModel
+from .load_model import UniRigLoadModel, MIALoadModel
 from .auto_rig import UniRigAutoRig
 from .skeleton_extraction import UniRigExtractSkeletonNew
 from .skinning import UniRigApplySkinningMLNew
-from .mia_model_loader import MIALoadModel
 from .mia_auto_rig import MIAAutoRig
 from .animation import UniRigApplyAnimation
 from .skeleton_io import (
@@ -35,7 +24,6 @@ from .skeleton_io import (
     UniRigDebugSkeleton,
     UniRigCompareSkeletons,
 )
-from .rest_pose_node import UniRigExtractRestPose
 from .orientation_check import UniRigOrientationCheck
 
 NODE_CLASS_MAPPINGS = {
@@ -54,7 +42,6 @@ NODE_CLASS_MAPPINGS = {
     "UniRigViewRigging": UniRigViewRigging,
     "UniRigDebugSkeleton": UniRigDebugSkeleton,
     "UniRigCompareSkeletons": UniRigCompareSkeletons,
-    "UniRigExtractRestPose": UniRigExtractRestPose,
     "UniRigOrientationCheck": UniRigOrientationCheck,
 }
 
@@ -74,6 +61,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "UniRigViewRigging": "UniRig: View Rigging",
     "UniRigDebugSkeleton": "UniRig: Debug Skeleton",
     "UniRigCompareSkeletons": "UniRig: Compare Skeletons",
-    "UniRigExtractRestPose": "UniRig: Extract Rest Pose",
     "UniRigOrientationCheck": "UniRig: Orientation Check",
 }

@@ -5,6 +5,7 @@ Uses comfy-env isolated environment for GPU dependencies.
 Uses direct Python inference with bpy for FBX export.
 """
 
+import logging
 import os
 import sys
 import tempfile
@@ -13,70 +14,45 @@ import numpy as np
 import time
 import folder_paths
 
+log = logging.getLogger("unirig")
+
 # Support both relative imports (ComfyUI) and absolute imports (testing)
 try:
     from .base import (
-        UNIRIG_PATH,
         UNIRIG_MODELS_DIR,
-        LIB_DIR,
         decode_texture_to_comfy_image,
         create_placeholder_texture,
     )
 except ImportError:
     from base import (
-        UNIRIG_PATH,
         UNIRIG_MODELS_DIR,
-        LIB_DIR,
         decode_texture_to_comfy_image,
         create_placeholder_texture,
     )
 
-# Direct inference module
-_DIRECT_INFERENCE_MODULE = None
-
 # Direct FBX export module (bpy as Python module)
-_DIRECT_EXPORT_MODULE = None
+try:
+    from .unirig import direct_export_fbx as _direct_export_module
+except Exception as e:
+    log.info("Direct FBX export not available: %s", e)
+    _direct_export_module = None
+
+# Direct inference module
+try:
+    from .unirig import direct as _direct_inference_module
+except Exception as e:
+    log.info("Direct inference not available: %s", e)
+    _direct_inference_module = None
 
 
 def _get_direct_export():
     """Get the direct FBX export module for in-process export using bpy."""
-    global _DIRECT_EXPORT_MODULE
-    if _DIRECT_EXPORT_MODULE is None:
-        export_path = os.path.join(LIB_DIR, "unirig", "src", "inference", "direct_export_fbx.py")
-        if os.path.exists(export_path):
-            try:
-                import importlib.util
-                spec = importlib.util.spec_from_file_location("unirig_direct_export", export_path)
-                _DIRECT_EXPORT_MODULE = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(_DIRECT_EXPORT_MODULE)
-                print(f"[UniRig] Loaded direct FBX export module from {export_path}")
-            except ImportError as e:
-                print(f"[UniRig] Direct FBX export not available (bpy not installed): {e}")
-                _DIRECT_EXPORT_MODULE = False
-            except Exception as e:
-                print(f"[UniRig] Warning: Could not load direct FBX export module: {e}")
-                _DIRECT_EXPORT_MODULE = False
-        else:
-            print(f"[UniRig] Warning: Direct FBX export module not found at {export_path}")
-            _DIRECT_EXPORT_MODULE = False
-    return _DIRECT_EXPORT_MODULE if _DIRECT_EXPORT_MODULE else None
+    return _direct_export_module
 
 
 def _get_direct_inference():
     """Get the direct inference module for in-process model inference."""
-    global _DIRECT_INFERENCE_MODULE
-    if _DIRECT_INFERENCE_MODULE is None:
-        direct_path = os.path.join(LIB_DIR, "unirig", "src", "inference", "direct.py")
-        if os.path.exists(direct_path):
-            import importlib.util
-            spec = importlib.util.spec_from_file_location("unirig_direct", direct_path)
-            _DIRECT_INFERENCE_MODULE = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(_DIRECT_INFERENCE_MODULE)
-            print(f"[UniRig] Loaded direct inference module from {direct_path}")
-        else:
-            print(f"[UniRig] Warning: Direct inference module not found at {direct_path}")
-            _DIRECT_INFERENCE_MODULE = False
-    return _DIRECT_INFERENCE_MODULE if _DIRECT_INFERENCE_MODULE else None
+    return _direct_inference_module
 
 
 class UniRigApplySkinningMLNew:
@@ -143,7 +119,7 @@ class UniRigApplySkinningMLNew:
     def apply_skinning(self, normalized_mesh, skeleton, skinning_model,
                        fbx_name=None, voxel_grid_size=None, num_samples=None, vertex_samples=None,
                        voxel_mask_power=None):
-        print(f"[UniRigApplySkinningMLNew] Starting ML skinning (cached model only)...")
+        log.info(f"Starting ML skinning (cached model only)...")
 
         # Validate model is provided
         if skinning_model is None:
@@ -159,7 +135,7 @@ class UniRigApplySkinningMLNew:
                 "Please connect a UniRigLoadSkinningModel node."
             )
 
-        print(f"[UniRigApplySkinningMLNew] Using pre-loaded cached model")
+        log.info(f"Using pre-loaded cached model")
         task_config_path = skinning_model.get("task_config_path")
 
         # Create temporary directory
@@ -198,7 +174,7 @@ class UniRigApplySkinningMLNew:
         if skeleton.get('uv_coords') is not None:
             save_data['uv_coords'] = skeleton['uv_coords']
             save_data['uv_faces'] = skeleton.get('uv_faces')
-            print(f"[UniRigApplySkinningMLNew] UV data included: {len(skeleton['uv_coords'])} UVs")
+            log.info(f"UV data included: {len(skeleton['uv_coords'])} UVs")
         else:
             save_data['uv_coords'] = np.array([], dtype=np.float32)
             save_data['uv_faces'] = np.array([], dtype=np.int32)
@@ -210,7 +186,7 @@ class UniRigApplySkinningMLNew:
             save_data['texture_width'] = skeleton.get('texture_width', 0)
             save_data['texture_height'] = skeleton.get('texture_height', 0)
             save_data['material_name'] = skeleton.get('material_name', '')
-            print(f"[UniRigApplySkinningMLNew] Texture data included: {skeleton['texture_width']}x{skeleton['texture_height']} {skeleton['texture_format']}")
+            log.info(f"Texture data included: {skeleton['texture_width']}x{skeleton['texture_height']} {skeleton['texture_format']}")
         else:
             save_data['texture_data_base64'] = ""
             save_data['texture_format'] = ""
@@ -219,13 +195,13 @@ class UniRigApplySkinningMLNew:
             save_data['material_name'] = skeleton.get('material_name', '')
 
         np.savez(predict_skeleton_path, **save_data)
-        print(f"[UniRigApplySkinningMLNew] Prepared skeleton NPZ: {predict_skeleton_path}")
+        log.info(f"Prepared skeleton NPZ: {predict_skeleton_path}")
 
         # Export mesh to GLB
         input_glb = os.path.join(temp_dir, "input.glb")
 
         normalized_mesh.export(input_glb)
-        print(f"[UniRigApplySkinningMLNew] Exported mesh: {normalized_mesh.vertices.shape[0]} vertices, {normalized_mesh.faces.shape[0]} faces")
+        log.info(f"Exported mesh: {normalized_mesh.vertices.shape[0]} vertices, {normalized_mesh.faces.shape[0]} faces")
 
         # Run skinning inference
         step_start = time.time()
@@ -243,10 +219,10 @@ class UniRigApplySkinningMLNew:
             config_overrides['voxel_mask_power'] = voxel_mask_power
 
         if config_overrides:
-            print(f"[UniRigApplySkinningMLNew] Config overrides: {config_overrides}")
+            log.info(f"Config overrides: {config_overrides}")
 
         # Run direct inference (no subprocess)
-        print(f"[UniRigApplySkinningMLNew] Running skinning inference with direct inference...")
+        log.info(f"Running skinning inference with direct inference...")
         direct_module = _get_direct_inference()
         if not direct_module:
             raise RuntimeError("Direct inference module not available. Check installation.")
@@ -260,7 +236,7 @@ class UniRigApplySkinningMLNew:
         if not os.path.exists(checkpoint_path):
             raise RuntimeError(f"Skinning checkpoint not found: {checkpoint_path}")
 
-        print(f"[UniRigApplySkinningMLNew] Using checkpoint: {checkpoint_path}")
+        log.info(f"Using checkpoint: {checkpoint_path}")
 
         # Get mesh data from skeleton dict or normalized_mesh
         mesh_vertices = skeleton.get('mesh_vertices')
@@ -289,8 +265,12 @@ class UniRigApplySkinningMLNew:
         # Get voxel grid size from config overrides
         voxel_grid_size_val = config_overrides.get('voxel_grid_size', 196)
 
-        print(f"[UniRigApplySkinningMLNew] Mesh: {len(mesh_vertices)} vertices, {len(mesh_faces)} faces")
-        print(f"[UniRigApplySkinningMLNew] Skeleton: {len(joints)} joints")
+        log.info(f"Mesh: {len(mesh_vertices)} vertices, {len(mesh_faces)} faces")
+        log.info(f"Skeleton: {len(joints)} joints")
+
+        # Extract dtype and attn_backend from model config (set by UniRigLoadModel)
+        model_dtype = skinning_model.get("dtype")
+        model_attn_backend = skinning_model.get("attn_backend", "auto")
 
         # Run direct skinning prediction
         skin_weights = direct_module.predict_skinning(
@@ -302,14 +282,16 @@ class UniRigApplySkinningMLNew:
             faces=mesh_faces,
             tails=tails,
             voxel_grid_size=voxel_grid_size_val,
+            dtype=model_dtype,
+            attn_backend=model_attn_backend,
         )
 
         inference_time = time.time() - step_start
-        print(f"[UniRigApplySkinningMLNew] [OK] Direct inference completed in {inference_time:.2f}s")
-        print(f"[UniRigApplySkinningMLNew] Skin weights shape: {skin_weights.shape}")
+        log.info(f"[OK] Direct inference completed in {inference_time:.2f}s")
+        log.info(f"Skin weights shape: {skin_weights.shape}")
 
         # Generate FBX output using direct bpy export
-        print(f"[UniRigApplySkinningMLNew] Generating FBX...")
+        log.info(f"Generating FBX...")
 
         direct_export = _get_direct_export()
         if not direct_export:
@@ -330,17 +312,17 @@ class UniRigApplySkinningMLNew:
             texture_format=skeleton.get('texture_format') or 'PNG',
             material_name=skeleton.get('material_name') or 'Material',
         )
-        print(f"[UniRigApplySkinningMLNew] [OK] FBX generated: {output_fbx}")
+        log.info(f"[OK] FBX generated: {output_fbx}")
 
-        print(f"[UniRigApplySkinningMLNew] Skinning completed")
+        log.info(f"Skinning completed")
 
         # Verify FBX output
         fbx_path = output_fbx
         if not os.path.exists(fbx_path):
             raise RuntimeError(f"Skinning output FBX not found: {fbx_path}")
 
-        print(f"[UniRigApplySkinningMLNew] Found output FBX: {fbx_path}")
-        print(f"[UniRigApplySkinningMLNew] FBX file size: {os.path.getsize(fbx_path)} bytes")
+        log.info(f"Found output FBX: {fbx_path}")
+        log.info(f"FBX file size: {os.path.getsize(fbx_path)} bytes")
 
         # Auto-save FBX to output directory
         output_dir = folder_paths.get_output_directory()
@@ -362,23 +344,23 @@ class UniRigApplySkinningMLNew:
         output_path = os.path.join(output_dir, output_filename)
         shutil.copy(fbx_path, output_path)
 
-        print(f"[UniRigApplySkinningMLNew] Auto-saved FBX to output: {output_filename}")
-        print(f"[UniRigApplySkinningMLNew] Full path: {output_path}")
+        log.info(f"Auto-saved FBX to output: {output_filename}")
+        log.info(f"Full path: {output_path}")
 
         # Create texture preview output
         texture_preview = None
         if skeleton.get('texture_data_base64'):
             texture_preview, tex_w, tex_h = decode_texture_to_comfy_image(skeleton['texture_data_base64'])
             if texture_preview is not None:
-                print(f"[UniRigApplySkinningMLNew] Texture preview created: {tex_w}x{tex_h}")
+                log.info(f"Texture preview created: {tex_w}x{tex_h}")
             else:
-                print(f"[UniRigApplySkinningMLNew] Warning: Could not decode texture for preview")
+                log.warning(f"Could not decode texture for preview")
                 texture_preview = create_placeholder_texture()
         else:
-            print(f"[UniRigApplySkinningMLNew] No texture available for preview")
+            log.info(f"No texture available for preview")
             texture_preview = create_placeholder_texture()
 
-        print(f"[UniRigApplySkinningMLNew] Skinning application complete!")
+        log.info(f"Skinning application complete!")
 
         # Clean up temporary directory
         # Windows-specific: Force garbage collection and retry logic to release file handles
@@ -392,13 +374,13 @@ class UniRigApplySkinningMLNew:
         try:
             # First attempt with ignore_errors
             shutil.rmtree(temp_dir, ignore_errors=True)
-            print(f"[UniRigApplySkinningMLNew] Cleaned up temp directory")
+            log.info(f"Cleaned up temp directory")
         except Exception as e:
             # Don't fail the whole operation if cleanup fails
-            print(f"[UniRigApplySkinningMLNew] Warning: Could not clean up temp directory: {e}")
+            log.warning(f"Could not clean up temp directory: {e}")
 
         # Windows: If directory still exists, schedule for deletion on restart
         if sys.platform == 'win32' and os.path.exists(temp_dir):
-            print(f"[UniRigApplySkinningMLNew] Note: Temp directory will be cleaned on next restart: {temp_dir}")
+            log.info(f"Temp directory will be cleaned on next restart: {temp_dir}")
 
         return (output_filename, texture_preview)

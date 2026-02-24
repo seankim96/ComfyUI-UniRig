@@ -6,6 +6,8 @@ import torch
 from torch import nn, einsum
 import torch.nn.functional as F
 
+import comfy.ops
+
 from einops import rearrange, repeat
 
 # Lazy import torch_cluster - not available in ComfyUI main process
@@ -39,11 +41,13 @@ def cache_fn(f):
     return cached_fn
 
 class PreNorm(nn.Module):
-    def __init__(self, dim, fn, context_dim = None):
+    def __init__(self, dim, fn, context_dim = None, operations=None):
         super().__init__()
+        if operations is None:
+            operations = comfy.ops.disable_weight_init
         self.fn = fn
-        self.norm = nn.LayerNorm(dim)
-        self.norm_context = nn.LayerNorm(context_dim) if exists(context_dim) else None
+        self.norm = operations.LayerNorm(dim)
+        self.norm_context = operations.LayerNorm(context_dim) if exists(context_dim) else None
 
     def forward(self, x, **kwargs):
         x = self.norm(x)
@@ -61,12 +65,14 @@ class GEGLU(nn.Module):
         return x * F.gelu(gates)
 
 class FeedForward(nn.Module):
-    def __init__(self, dim, mult = 4, drop_path_rate = 0.0):
+    def __init__(self, dim, mult = 4, drop_path_rate = 0.0, operations=None):
         super().__init__()
+        if operations is None:
+            operations = comfy.ops.disable_weight_init
         self.net = nn.Sequential(
-            nn.Linear(dim, dim * mult * 2),
+            operations.Linear(dim, dim * mult * 2),
             GEGLU(),
-            nn.Linear(dim * mult, dim)
+            operations.Linear(dim * mult, dim)
         )
 
         self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0. else nn.Identity()
@@ -74,21 +80,32 @@ class FeedForward(nn.Module):
     def forward(self, x):
         return self.drop_path(self.net(x))
 
+import logging
+_ae_log = logging.getLogger("unirig")
+
 class Attention(nn.Module):
-    def __init__(self, query_dim, context_dim = None, heads = 8, dim_head = 64, drop_path_rate = 0.0):
+    _log_count = 0  # throttle debug output
+
+    def __init__(self, query_dim, context_dim = None, heads = 8, dim_head = 64, drop_path_rate = 0.0, operations=None):
         super().__init__()
+        if operations is None:
+            operations = comfy.ops.disable_weight_init
         inner_dim = dim_head * heads
         context_dim = default(context_dim, query_dim)
         self.scale = dim_head ** -0.5
         self.heads = heads
 
-        self.to_q = nn.Linear(query_dim, inner_dim, bias = False)
-        self.to_kv = nn.Linear(context_dim, inner_dim * 2, bias = False)
-        self.to_out = nn.Linear(inner_dim, query_dim)
+        self.to_q = operations.Linear(query_dim, inner_dim, bias = False)
+        self.to_kv = operations.Linear(context_dim, inner_dim * 2, bias = False)
+        self.to_out = operations.Linear(inner_dim, query_dim)
 
         self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0. else nn.Identity()
 
     def forward(self, x, context = None, mask = None, return_score=False):
+        if Attention._log_count < 3:
+            _ae_log.debug("MIA Attention: x=%s dtype=%s device=%s, heads=%d",
+                          list(x.shape), x.dtype, x.device, self.heads)
+            Attention._log_count += 1
         h = self.heads
 
         q = self.to_q(x)
@@ -121,8 +138,10 @@ class Attention(nn.Module):
 
 
 class PointEmbed(nn.Module):
-    def __init__(self, hidden_dim=48, dim=128):
+    def __init__(self, hidden_dim=48, dim=128, operations=None):
         super().__init__()
+        if operations is None:
+            operations = comfy.ops.disable_weight_init
 
         assert hidden_dim % 6 == 0
 
@@ -138,7 +157,7 @@ class PointEmbed(nn.Module):
         ])
         self.register_buffer('basis', e)  # 3 x 16
 
-        self.mlp = nn.Linear(self.embedding_dim+3, dim)
+        self.mlp = operations.Linear(self.embedding_dim+3, dim)
 
     @staticmethod
     def embed(input, basis):
@@ -206,9 +225,12 @@ class AutoEncoder(nn.Module):
         heads = 8,
         dim_head = 64,
         weight_tie_layers = False,
-        decoder_ff = False
+        decoder_ff = False,
+        operations=None
     ):
         super().__init__()
+        if operations is None:
+            operations = comfy.ops.disable_weight_init
 
         self.depth = depth
 
@@ -216,14 +238,14 @@ class AutoEncoder(nn.Module):
         self.num_latents = num_latents
 
         self.cross_attend_blocks = nn.ModuleList([
-            PreNorm(dim, Attention(dim, dim, heads = 1, dim_head = dim), context_dim = dim),
-            PreNorm(dim, FeedForward(dim))
+            PreNorm(dim, Attention(dim, dim, heads = 1, dim_head = dim, operations=operations), context_dim = dim, operations=operations),
+            PreNorm(dim, FeedForward(dim, operations=operations), operations=operations)
         ])
 
-        self.point_embed = PointEmbed(dim=dim)
+        self.point_embed = PointEmbed(dim=dim, operations=operations)
 
-        get_latent_attn = lambda: PreNorm(dim, Attention(dim, heads = heads, dim_head = dim_head, drop_path_rate=0.1))
-        get_latent_ff = lambda: PreNorm(dim, FeedForward(dim, drop_path_rate=0.1))
+        get_latent_attn = lambda: PreNorm(dim, Attention(dim, heads = heads, dim_head = dim_head, drop_path_rate=0.1, operations=operations), operations=operations)
+        get_latent_ff = lambda: PreNorm(dim, FeedForward(dim, drop_path_rate=0.1, operations=operations), operations=operations)
         get_latent_attn, get_latent_ff = map(cache_fn, (get_latent_attn, get_latent_ff))
 
         self.layers = nn.ModuleList([])
@@ -235,10 +257,10 @@ class AutoEncoder(nn.Module):
                 get_latent_ff(**cache_args)
             ]))
 
-        self.decoder_cross_attn = PreNorm(queries_dim, Attention(queries_dim, dim, heads = 1, dim_head = dim), context_dim = dim)
-        self.decoder_ff = PreNorm(queries_dim, FeedForward(queries_dim)) if decoder_ff else None
+        self.decoder_cross_attn = PreNorm(queries_dim, Attention(queries_dim, dim, heads = 1, dim_head = dim, operations=operations), context_dim = dim, operations=operations)
+        self.decoder_ff = PreNorm(queries_dim, FeedForward(queries_dim, operations=operations), operations=operations) if decoder_ff else None
 
-        self.to_outputs = nn.Linear(queries_dim, output_dim) if exists(output_dim) else nn.Identity()
+        self.to_outputs = operations.Linear(queries_dim, output_dim) if exists(output_dim) else nn.Identity()
 
     def encode(self, pc):
         # pc: B x N x 3
@@ -310,9 +332,12 @@ class KLAutoEncoder(nn.Module):
         heads = 8,
         dim_head = 64,
         weight_tie_layers = False,
-        decoder_ff = False
+        decoder_ff = False,
+        operations=None
     ):
         super().__init__()
+        if operations is None:
+            operations = comfy.ops.disable_weight_init
 
         self.depth = depth
 
@@ -320,14 +345,14 @@ class KLAutoEncoder(nn.Module):
         self.num_latents = num_latents
 
         self.cross_attend_blocks = nn.ModuleList([
-            PreNorm(dim, Attention(dim, dim, heads = 1, dim_head = dim), context_dim = dim),
-            PreNorm(dim, FeedForward(dim))
+            PreNorm(dim, Attention(dim, dim, heads = 1, dim_head = dim, operations=operations), context_dim = dim, operations=operations),
+            PreNorm(dim, FeedForward(dim, operations=operations), operations=operations)
         ])
 
-        self.point_embed = PointEmbed(dim=dim)
+        self.point_embed = PointEmbed(dim=dim, operations=operations)
 
-        get_latent_attn = lambda: PreNorm(dim, Attention(dim, heads = heads, dim_head = dim_head, drop_path_rate=0.1))
-        get_latent_ff = lambda: PreNorm(dim, FeedForward(dim, drop_path_rate=0.1))
+        get_latent_attn = lambda: PreNorm(dim, Attention(dim, heads = heads, dim_head = dim_head, drop_path_rate=0.1, operations=operations), operations=operations)
+        get_latent_ff = lambda: PreNorm(dim, FeedForward(dim, drop_path_rate=0.1, operations=operations), operations=operations)
         get_latent_attn, get_latent_ff = map(cache_fn, (get_latent_attn, get_latent_ff))
 
         self.layers = nn.ModuleList([])
@@ -339,15 +364,15 @@ class KLAutoEncoder(nn.Module):
                 get_latent_ff(**cache_args)
             ]))
 
-        self.decoder_cross_attn = PreNorm(queries_dim, Attention(queries_dim, dim, heads = 1, dim_head = dim), context_dim = dim)
-        self.decoder_ff = PreNorm(queries_dim, FeedForward(queries_dim)) if decoder_ff else None
+        self.decoder_cross_attn = PreNorm(queries_dim, Attention(queries_dim, dim, heads = 1, dim_head = dim, operations=operations), context_dim = dim, operations=operations)
+        self.decoder_ff = PreNorm(queries_dim, FeedForward(queries_dim, operations=operations), operations=operations) if decoder_ff else None
 
-        self.to_outputs = nn.Linear(queries_dim, output_dim) if exists(output_dim) else nn.Identity()
+        self.to_outputs = operations.Linear(queries_dim, output_dim) if exists(output_dim) else nn.Identity()
 
-        self.proj = nn.Linear(latent_dim, dim)
+        self.proj = operations.Linear(latent_dim, dim)
 
-        self.mean_fc = nn.Linear(dim, latent_dim)
-        self.logvar_fc = nn.Linear(dim, latent_dim)
+        self.mean_fc = operations.Linear(dim, latent_dim)
+        self.logvar_fc = operations.Linear(dim, latent_dim)
 
     def encode(self, pc):
         # pc: B x N x 3
@@ -415,7 +440,7 @@ class KLAutoEncoder(nn.Module):
         # return o.squeeze(-1), kl
         return {'logits': o, 'kl': kl}
 
-def create_autoencoder(dim=512, M=512, latent_dim=64, N=2048, deterministic=False):
+def create_autoencoder(dim=512, M=512, latent_dim=64, N=2048, deterministic=False, operations=None):
     if deterministic:
         model = AutoEncoder(
             depth=24,
@@ -426,6 +451,7 @@ def create_autoencoder(dim=512, M=512, latent_dim=64, N=2048, deterministic=Fals
             num_latents = M,
             heads = 8,
             dim_head = 64,
+            operations=operations,
         )
     else:
         model = KLAutoEncoder(
@@ -438,6 +464,7 @@ def create_autoencoder(dim=512, M=512, latent_dim=64, N=2048, deterministic=Fals
             latent_dim = latent_dim,
             heads = 8,
             dim_head = 64,
+            operations=operations,
         )
     return model
 

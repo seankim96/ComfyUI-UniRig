@@ -1,7 +1,7 @@
 python = "3.11"  # Required by bpy 4.2
 
 [cuda]
-packages = ["torch-scatter", "torch-cluster", "flash-attn", "torch", "torchvision"]
+packages = ["torch-scatter", "torch-cluster", "flash-attn", "torch", "torchvision", "cumm", "spconv"]
 
 [pypi-dependencies]
 # Blender
@@ -10,6 +10,9 @@ bpy = ">=4.2,<4.3"
 # Core
 numpy = "<2.0"
 trimesh = { version = "*", extras = ["easy"] }
+psutil = "*"
+comfy-aimdo = "*"
+comfy-sparse-attn = "*"
 
 # ML libs
 transformers = "==4.51.3"
@@ -19,17 +22,14 @@ timm = "*"
 einops = "*"
 addict = "*"
 omegaconf = "*"
-python-box = "*"
 huggingface_hub = "*"
 wandb = "*"
-spconv-cu121 = "*"
 hf_xet = "*"
 
 # Geometry
 fast-simplification = "*"
 pyrender = "*"
 libigl = "*"
-cumm-cu121 = "==0.7.11"
 pccm = "*"
 shapely = "*"
 

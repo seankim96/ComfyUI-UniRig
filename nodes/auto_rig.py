@@ -1,13 +1,14 @@
 """
 UniRigAutoRig - Single node for complete rigging pipeline.
 Takes mesh, outputs animation-ready FBX.
-
-Uses comfy-env isolated environment for GPU dependencies.
 """
 
+import logging
 import os
 import sys
 import time
+
+log = logging.getLogger("unirig")
 
 # Support both relative imports (ComfyUI) and absolute imports (testing)
 try:
@@ -74,15 +75,22 @@ class UniRigAutoRig:
         4. Export FBX
         """
         total_start = time.time()
-        print(f"[UniRigAutoRig] Starting complete rigging pipeline...")
-        print(f"[UniRigAutoRig] Skeleton template: {skeleton_template}")
+        log.info("Starting complete rigging pipeline...")
+        log.info("Skeleton template: %s", skeleton_template)
 
         # Extract individual models from combined model
         skeleton_model = model["skeleton_model"]
         skinning_model = model["skinning_model"]
 
+        # Propagate dtype and attn_backend if not already set
+        for sub_model in (skeleton_model, skinning_model):
+            if "dtype" not in sub_model:
+                sub_model["dtype"] = model.get("dtype")
+            if "attn_backend" not in sub_model:
+                sub_model["attn_backend"] = model.get("attn_backend", "auto")
+
         # Step 1: Extract skeleton
-        print(f"[UniRigAutoRig] Step 1/2: Extracting skeleton...")
+        log.info("Step 1/2: Extracting skeleton...")
         step_start = time.time()
 
         skeleton_extractor = UniRigExtractSkeletonNew()
@@ -95,11 +103,11 @@ class UniRigAutoRig:
         )
 
         skeleton_time = time.time() - step_start
-        print(f"[UniRigAutoRig] Skeleton extraction complete in {skeleton_time:.2f}s")
-        print(f"[UniRigAutoRig] Extracted {len(skeleton.get('names', []))} bones")
+        log.info("Skeleton extraction complete in %.2fs", skeleton_time)
+        log.info("Extracted %d bones", len(skeleton.get('names', [])))
 
         # Step 2: Apply skinning
-        print(f"[UniRigAutoRig] Step 2/2: Applying skinning...")
+        log.info("Step 2/2: Applying skinning...")
         step_start = time.time()
 
         skinning_applier = UniRigApplySkinningMLNew()
@@ -115,13 +123,13 @@ class UniRigAutoRig:
         )
 
         skinning_time = time.time() - step_start
-        print(f"[UniRigAutoRig] Skinning complete in {skinning_time:.2f}s")
+        log.info("Skinning complete in %.2fs", skinning_time)
 
         total_time = time.time() - total_start
-        print(f"[UniRigAutoRig] ========================================")
-        print(f"[UniRigAutoRig] Complete rigging pipeline finished!")
-        print(f"[UniRigAutoRig] Total time: {total_time:.2f}s")
-        print(f"[UniRigAutoRig] Output: {fbx_output_path}")
-        print(f"[UniRigAutoRig] ========================================")
+        log.info("========================================")
+        log.info("Complete rigging pipeline finished!")
+        log.info("Total time: %.2fs", total_time)
+        log.info("Output: %s", fbx_output_path)
+        log.info("========================================")
 
         return (fbx_output_path,)

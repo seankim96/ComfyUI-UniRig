@@ -11,45 +11,27 @@ try:
     import folder_paths
     COMFYUI_INPUT_FOLDER = folder_paths.get_input_directory()
     COMFYUI_OUTPUT_FOLDER = folder_paths.get_output_directory()
-except:
+except Exception as e:
     COMFYUI_INPUT_FOLDER = None
     COMFYUI_OUTPUT_FOLDER = None
 
-# Import from base module
-try:
-    from .base import LIB_DIR
-except ImportError:
-    from base import LIB_DIR
+import logging
 
+log = logging.getLogger("unirig")
 # Animation templates folder (in input directory, copied by prestartup_script.py)
 ANIMATION_TEMPLATES_DIR = Path(COMFYUI_INPUT_FOLDER) / "animation_templates" if COMFYUI_INPUT_FOLDER else None
 
 # Direct animation module (bpy as Python module)
-_DIRECT_ANIMATION_MODULE = None
+try:
+    from .unirig import direct_apply_animation as _direct_animation_module
+except Exception as e:
+    log.info("Direct animation not available: %s", e)
+    _direct_animation_module = None
 
 
 def _get_direct_animation():
     """Get the direct animation module for in-process animation using bpy."""
-    global _DIRECT_ANIMATION_MODULE
-    if _DIRECT_ANIMATION_MODULE is None:
-        animation_path = os.path.join(LIB_DIR, "unirig", "src", "inference", "direct_apply_animation.py")
-        if os.path.exists(animation_path):
-            try:
-                import importlib.util
-                spec = importlib.util.spec_from_file_location("unirig_direct_animation", animation_path)
-                _DIRECT_ANIMATION_MODULE = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(_DIRECT_ANIMATION_MODULE)
-                print(f"[UniRig] Loaded direct animation module from {animation_path}")
-            except ImportError as e:
-                print(f"[UniRig] Direct animation not available (bpy not installed): {e}")
-                _DIRECT_ANIMATION_MODULE = False
-            except Exception as e:
-                print(f"[UniRig] Warning: Could not load direct animation module: {e}")
-                _DIRECT_ANIMATION_MODULE = False
-        else:
-            print(f"[UniRig] Warning: Direct animation module not found at {animation_path}")
-            _DIRECT_ANIMATION_MODULE = False
-    return _DIRECT_ANIMATION_MODULE if _DIRECT_ANIMATION_MODULE else None
+    return _direct_animation_module
 
 
 class UniRigApplyAnimation:
@@ -155,9 +137,9 @@ class UniRigApplyAnimation:
                 "Ensure bpy is installed in the unirig environment."
             )
 
-        print(f"[UniRigApplyAnimation] Model: {model_fbx_path}")
-        print(f"[UniRigApplyAnimation] Animation type: {animation_type}")
-        print(f"[UniRigApplyAnimation] Animation: {animation_file}")
+        log.info("Model: %s", model_fbx_path)
+        log.info("Animation type: %s", animation_type)
+        log.info("Animation: %s", animation_file)
 
         # Early validation: Check if model filename suggests skeleton template compatibility
         model_basename = os.path.basename(model_fbx_path).lower()
@@ -179,7 +161,7 @@ class UniRigApplyAnimation:
                 )
             # Positive check: should have mixamo in name
             if "_mixamo" not in model_basename:
-                print(f"[UniRigApplyAnimation] Warning: Model filename does not contain '_mixamo'. "
+                log.warning("Warning: Model filename does not contain '_mixamo'. "
                       f"Make sure you used skeleton_template='mixamo' when extracting the skeleton.")
 
         # Handle different animation types
@@ -204,10 +186,10 @@ class UniRigApplyAnimation:
             output_filename = f"{model_name}_{anim_name}.fbx"
 
         output_path = os.path.join(output_dir, output_filename)
-        print(f"[UniRigApplyAnimation] Output: {output_path}")
+        log.info("Output: %s", output_path)
 
         # Run direct animation module
-        print(f"[UniRigApplyAnimation] Applying animation...")
+        log.info("Applying animation...")
         start_time = time.time()
 
         try:
@@ -221,8 +203,8 @@ class UniRigApplyAnimation:
                 raise RuntimeError("Animation module did not produce output FBX file")
 
             elapsed = time.time() - start_time
-            print(f"[UniRigApplyAnimation] Animation applied in {elapsed:.2f}s")
-            print(f"[UniRigApplyAnimation] Output: {output_path}")
+            log.info("Animation applied in %.2fs", elapsed)
+            log.info("Output: %s", output_path)
 
             return (output_path,)
 

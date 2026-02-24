@@ -488,7 +488,7 @@ def predict_skinning(
     # Extract skin weights - result is a list of tensors, one per batch
     skin_weights = result[0]  # Get first (only) batch item
     if isinstance(skin_weights, torch.Tensor):
-        skin_weights = skin_weights.cpu().numpy()
+        skin_weights = skin_weights.cpu().float().numpy()
 
     return skin_weights
 

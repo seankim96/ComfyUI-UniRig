@@ -92,10 +92,11 @@ class MIAAutoRig:
 
         # model is a config dict from MIALoadModel - extract settings
         cache_to_gpu = model.get("cache_to_gpu", True)
-        log.info("Config: cache_to_gpu=%s", cache_to_gpu)
+        dtype = model.get("dtype", "fp32")
+        log.info("Config: cache_to_gpu=%s, dtype=%s", cache_to_gpu, dtype)
 
         # Load models internally (downloads from HuggingFace if needed)
-        cache_key = load_mia_models(cache_to_gpu=cache_to_gpu)
+        cache_key = load_mia_models(cache_to_gpu=cache_to_gpu, dtype=dtype)
         models = get_cached_models(cache_key)
 
         # Generate output filename

@@ -110,19 +110,28 @@ def ensure_mia_models() -> bool:
         return False
 
 
-def load_mia_models(cache_to_gpu: bool = True) -> str:
+def _wrap_model_patcher(model, load_device, offload_device):
+    """Wrap a model in ComfyUI ModelPatcher for VRAM management."""
+    import comfy.model_patcher
+    return comfy.model_patcher.ModelPatcher(
+        model, load_device=load_device, offload_device=offload_device
+    )
+
+
+def load_mia_models(cache_to_gpu: bool = True, dtype: str = "fp32") -> str:
     """
-    Load all MIA models into memory.
+    Load all MIA models wrapped in ComfyUI ModelPatcher for VRAM management.
 
     Args:
         cache_to_gpu: If True, keep models on GPU for faster inference.
+        dtype: Model precision - "bf16", "fp16", or "fp32".
 
     Returns:
         Cache key string (models stay in worker, can't be pickled to host).
     """
     import torch  # Lazy import - loads torch_cluster via mia/ BEFORE bpy
 
-    cache_key = f"mia_models_gpu={cache_to_gpu}"
+    cache_key = f"mia_models_gpu={cache_to_gpu}_dtype={dtype}"
 
     if cache_key in _MODEL_CACHE:
         log.info("Using cached models")
@@ -132,8 +141,10 @@ def load_mia_models(cache_to_gpu: bool = True) -> str:
     if not ensure_mia_models():
         raise RuntimeError("Failed to download MIA models")
 
-    device = comfy.model_management.get_torch_device() if cache_to_gpu else torch.device("cpu")
-    log.info("Loading models to %s...", device)
+    load_device = comfy.model_management.get_torch_device()
+    offload_device = torch.device("cpu")
+    torch_dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}.get(dtype, torch.float32)
+    log.info("Loading MIA models (dtype=%s, load_device=%s, offload_device=%s)...", torch_dtype, load_device, offload_device)
 
     # Import vendored MIA modules
     from .mia import PCAE, JOINTS_NUM, KINEMATIC_TREE
@@ -143,82 +154,54 @@ def load_mia_models(cache_to_gpu: bool = True) -> str:
     geo_resample_ratio = 0.0
     hierarchical_ratio = hands_resample_ratio + geo_resample_ratio
 
-    # Load coarse joints model (for preprocessing)
-    log.info("Loading joints_coarse model...")
-    model_coarse = PCAE(
-        N=N,
-        input_normal=False,
-        deterministic=True,
-        output_dim=JOINTS_NUM,
-        predict_bw=False,
-        predict_joints=True,
-        predict_joints_tail=True,
-    )
-    model_coarse.load(str(MIA_MODELS_DIR / "joints_coarse.pth")).to(device).eval()
+    def _load_and_wrap(name, model_cls_kwargs, checkpoint):
+        """Load a model, cast dtype, wrap in ModelPatcher."""
+        log.info("Loading %s...", name)
+        model = PCAE(**model_cls_kwargs)
+        model.load(str(MIA_MODELS_DIR / checkpoint))
+        model.to(dtype=torch_dtype).eval()
+        patcher = _wrap_model_patcher(model, load_device, offload_device)
+        log.info("  %s wrapped in ModelPatcher (load=%s, offload=%s)", name, load_device, offload_device)
+        return patcher
 
-    # Load blend weights model
-    log.info("Loading bw model...")
-    model_bw = PCAE(
-        N=N,
-        input_normal=False,
-        input_attention=False,
-        deterministic=True,
-        hierarchical_ratio=hierarchical_ratio,
-    )
-    model_bw.load(str(MIA_MODELS_DIR / "bw.pth")).to(device).eval()
+    # Load all models on CPU with target dtype, wrapped in ModelPatcher
+    patcher_coarse = _load_and_wrap("joints_coarse", dict(
+        N=N, input_normal=False, deterministic=True, output_dim=JOINTS_NUM,
+        predict_bw=False, predict_joints=True, predict_joints_tail=True,
+    ), "joints_coarse.pth")
 
-    # Load blend weights with normals model
-    log.info("Loading bw_normal model...")
-    model_bw_normal = PCAE(
-        N=N,
-        input_normal=True,
-        input_attention=True,  # Checkpoint trained with attention
-        deterministic=True,
+    patcher_bw = _load_and_wrap("bw", dict(
+        N=N, input_normal=False, input_attention=False, deterministic=True,
         hierarchical_ratio=hierarchical_ratio,
-    )
-    model_bw_normal.load(str(MIA_MODELS_DIR / "bw_normal.pth")).to(device).eval()
+    ), "bw.pth")
 
-    # Load joints model
-    log.info("Loading joints model...")
-    model_joints = PCAE(
-        N=N,
-        input_normal=False,
-        deterministic=True,
+    patcher_bw_normal = _load_and_wrap("bw_normal", dict(
+        N=N, input_normal=True, input_attention=True, deterministic=True,
         hierarchical_ratio=hierarchical_ratio,
-        output_dim=JOINTS_NUM,
-        kinematic_tree=KINEMATIC_TREE,
-        predict_bw=False,
-        predict_joints=True,
-        predict_joints_tail=True,
-        joints_attn_causal=True,  # Match original MIA config
-    )
-    model_joints.load(str(MIA_MODELS_DIR / "joints.pth")).to(device).eval()
+    ), "bw_normal.pth")
 
-    # Load pose model
-    log.info("Loading pose model...")
-    model_pose = PCAE(
-        N=N,
-        input_normal=False,
-        deterministic=True,
-        hierarchical_ratio=hierarchical_ratio,
-        output_dim=JOINTS_NUM,
-        kinematic_tree=KINEMATIC_TREE,
-        predict_bw=False,
-        predict_pose_trans=True,
-        pose_mode="ortho6d",  # Match original MIA config
-        pose_input_joints=True,
-        pose_attn_causal=True,  # Match original MIA config
-    )
-    model_pose.load(str(MIA_MODELS_DIR / "pose.pth")).to(device).eval()
+    patcher_joints = _load_and_wrap("joints", dict(
+        N=N, input_normal=False, deterministic=True, hierarchical_ratio=hierarchical_ratio,
+        output_dim=JOINTS_NUM, kinematic_tree=KINEMATIC_TREE,
+        predict_bw=False, predict_joints=True, predict_joints_tail=True,
+        joints_attn_causal=True,
+    ), "joints.pth")
+
+    patcher_pose = _load_and_wrap("pose", dict(
+        N=N, input_normal=False, deterministic=True, hierarchical_ratio=hierarchical_ratio,
+        output_dim=JOINTS_NUM, kinematic_tree=KINEMATIC_TREE,
+        predict_bw=False, predict_pose_trans=True, pose_mode="ortho6d",
+        pose_input_joints=True, pose_attn_causal=True,
+    ), "pose.pth")
 
     models = {
         "backend": "make_it_animatable",
-        "model_coarse": model_coarse,
-        "model_bw": model_bw,
-        "model_bw_normal": model_bw_normal,
-        "model_joints": model_joints,
-        "model_pose": model_pose,
-        "device": device,
+        "patcher_coarse": patcher_coarse,
+        "patcher_bw": patcher_bw,
+        "patcher_bw_normal": patcher_bw_normal,
+        "patcher_joints": patcher_joints,
+        "patcher_pose": patcher_pose,
+        "dtype": torch_dtype,
         "cache_to_gpu": cache_to_gpu,
         "N": N,
         "hands_resample_ratio": hands_resample_ratio,
@@ -226,7 +209,7 @@ def load_mia_models(cache_to_gpu: bool = True) -> str:
     }
 
     _MODEL_CACHE[cache_key] = models
-    log.info("All models loaded successfully")
+    log.info("All MIA models loaded and wrapped in ModelPatcher")
 
     return cache_key  # Return key, not models (models can't be pickled to host)
 
@@ -267,10 +250,20 @@ def run_mia_inference(
     from .mia.pipeline import prepare_input, preprocess, infer, bw_post_process
     from .mia import BONES_IDX_DICT, KINEMATIC_TREE
 
-    device = models["device"]
     N = models["N"]
 
-    log.info("Starting inference...")
+    # Let ComfyUI manage GPU memory for all models
+    patchers = [
+        models["patcher_coarse"],
+        models["patcher_bw"],
+        models["patcher_bw_normal"],
+        models["patcher_joints"],
+        models["patcher_pose"],
+    ]
+    comfy.model_management.load_models_gpu(patchers)
+    device = patchers[0].load_device
+
+    log.info("Starting inference (device=%s)...", device)
     log.info("Options: no_fingers=%s, use_normal=%s, reset_to_rest=%s", no_fingers, use_normal, reset_to_rest)
 
     # Debug: Check input mesh visual before any processing
@@ -314,11 +307,13 @@ def run_mia_inference(
         log.warning("WARNING: data.mesh is None or missing!")
 
     # Preprocess (normalize, coarse joint localization)
+    dtype = models["dtype"]
     log.info("Preprocessing...")
     data = preprocess(
         data,
-        model_coarse=models["model_coarse"],
+        model_coarse=models["patcher_coarse"].model,
         device=device,
+        dtype=dtype,
         hands_resample_ratio=models["hands_resample_ratio"],
         geo_resample_ratio=models["geo_resample_ratio"],
         N=N,
@@ -328,11 +323,12 @@ def run_mia_inference(
     log.info("Running model inference...")
     data = infer(
         data,
-        model_bw=models["model_bw"],
-        model_bw_normal=models["model_bw_normal"],
-        model_joints=models["model_joints"],
-        model_pose=models["model_pose"],
+        model_bw=models["patcher_bw"].model,
+        model_bw_normal=models["patcher_bw_normal"].model,
+        model_joints=models["patcher_joints"].model,
+        model_pose=models["patcher_pose"].model,
         device=device,
+        dtype=dtype,
         use_normal=use_normal,
     )
 
@@ -352,7 +348,7 @@ def run_mia_inference(
     )
 
     # Prepare output data for Blender export
-    joints_np = data.joints.squeeze(0).numpy()
+    joints_np = data.joints.squeeze(0).float().numpy()
 
     # Debug: check pose data availability
     log.info("reset_to_rest=%s, data.pose is None: %s", reset_to_rest, data.pose is None)
@@ -360,7 +356,7 @@ def run_mia_inference(
         log.info("Pose shape: %s", data.pose.shape)
         # Save pose to known location for debugging
         pose_debug_path = os.path.join(folder_paths.get_temp_directory(), "mia_pose_debug.npy")
-        np.save(pose_debug_path, data.pose.squeeze(0).numpy())
+        np.save(pose_debug_path, data.pose.squeeze(0).float().numpy())
         log.debug("Saved pose data to %s", pose_debug_path)
 
     output_data = {
@@ -369,8 +365,8 @@ def run_mia_inference(
         "gs": None,
         "joints": joints_np[..., :3],
         "joints_tail": joints_np[..., 3:] if joints_np.shape[-1] > 3 else None,
-        "bw": bw.squeeze(0).numpy(),
-        "pose": data.pose.squeeze(0).numpy() if reset_to_rest and data.pose is not None else None,
+        "bw": bw.squeeze(0).float().numpy(),
+        "pose": data.pose.squeeze(0).float().numpy() if reset_to_rest and data.pose is not None else None,
         "bones_idx_dict": BONES_IDX_DICT,
         "parent_indices": KINEMATIC_TREE.parent_indices,  # For kinematic chain
         "pose_ignore_list": [],

@@ -219,6 +219,7 @@ def preprocess(
     data: InferenceData,
     model_coarse: torch.nn.Module,
     device: torch.device,
+    dtype: torch.dtype = None,
     hands_resample_ratio: float = 0.5,
     geo_resample_ratio: float = 0.0,
     N: int = 32768,
@@ -230,6 +231,7 @@ def preprocess(
         data: InferenceData from prepare_input
         model_coarse: Coarse joint prediction model
         device: Torch device
+        dtype: Model dtype for input casting (bf16/fp16/fp32)
         hands_resample_ratio: Ratio for hand oversampling
         geo_resample_ratio: Ratio for geometric sampling
         N: Number of sample points
@@ -242,6 +244,15 @@ def preprocess(
     pts_normal = data.pts_normal
     verts_normal = data.verts_normal
 
+    # Cast to pipeline dtype (ComfyUI native: work in model dtype throughout)
+    if dtype:
+        pts = pts.to(dtype=dtype)
+        verts = verts.to(dtype=dtype)
+        if pts_normal is not None:
+            pts_normal = pts_normal.to(dtype=dtype)
+        if verts_normal is not None:
+            verts_normal = verts_normal.to(dtype=dtype)
+
     # Normalize to unit cube centered at origin
     norm = get_normalize_transform(pts, keep_ratio=True, recenter=True)
     pts = norm.transform_points(pts)
@@ -249,7 +260,7 @@ def preprocess(
 
     # Run coarse joint localization
     with torch.no_grad():
-        pts_device = pts.to(device)
+        pts_device = pts.to(device=device)
         joints_out = model_coarse(pts_device).joints.cpu()
 
     joints, joints_tail = joints_out[..., :3], joints_out[..., 3:]
@@ -275,11 +286,11 @@ def preprocess(
         verts_normal = F.normalize(rotate.transform_normals(verts_normal), dim=-1)
 
     # Update mesh vertices for resampling
-    data.mesh.vertices = verts.squeeze(0).numpy()
+    data.mesh.vertices = verts.squeeze(0).float().numpy()
 
     # Resample with hand attention if requested
     if hands_resample_ratio > 0:
-        joints_tail_aligned = rotate.transform_points(joints_tail).squeeze(0).numpy()
+        joints_tail_aligned = rotate.transform_points(joints_tail).squeeze(0).float().numpy()
         hands_centers = [
             joints_tail_aligned[BONES_IDX_DICT[f"{MIXAMO_PREFIX}LeftHand"]],
             joints_tail_aligned[BONES_IDX_DICT[f"{MIXAMO_PREFIX}RightHand"]],
@@ -296,6 +307,12 @@ def preprocess(
         pts = torch.from_numpy(pts_np).unsqueeze(0)
         if data.is_mesh:
             pts, pts_normal = torch.chunk(pts, 2, dim=-1)
+
+        # Recast after numpy roundtrip (numpy produces fp32)
+        if dtype:
+            pts = pts.to(dtype=dtype)
+            if pts_normal is not None:
+                pts_normal = pts_normal.to(dtype=dtype)
 
     data.verts = verts
     data.verts_normal = verts_normal
@@ -328,6 +345,7 @@ def infer(
     model_joints: torch.nn.Module,
     model_pose: torch.nn.Module,
     device: torch.device,
+    dtype: torch.dtype = None,
     use_normal: bool = False,
 ) -> InferenceData:
     """
@@ -340,6 +358,7 @@ def infer(
         model_joints: Joint prediction model
         model_pose: Pose prediction model
         device: Torch device
+        dtype: Model dtype for input casting (bf16/fp16/fp32)
         use_normal: Whether to use normal-aware blend weights
 
     Returns:
@@ -350,6 +369,15 @@ def infer(
     verts = data.verts
     verts_normal = data.verts_normal
 
+    # Cast to pipeline dtype (ComfyUI native: work in model dtype throughout)
+    if dtype:
+        pts = pts.to(dtype=dtype)
+        verts = verts.to(dtype=dtype)
+        if pts_normal is not None:
+            pts_normal = pts_normal.to(dtype=dtype)
+        if verts_normal is not None:
+            verts_normal = verts_normal.to(dtype=dtype)
+
     if use_normal and not data.is_mesh:
         raise ValueError("Normals are not available for point clouds")
 
@@ -358,16 +386,19 @@ def infer(
     pts = norm.transform_points(pts)
     verts = norm.transform_points(verts)
 
+    # Move to device (dtype already set at pipeline entry above)
+    _to = dict(device=device)
+
     with torch.no_grad():
         # Blend weights inference
-        pts_device = pts.to(device)
-        verts_device = verts.to(device)
+        pts_device = pts.to(**_to)
+        verts_device = verts.to(**_to)
 
         bw = _chunked_bw(model_bw, pts_device, verts_device)
 
         if use_normal and pts_normal is not None:
-            pts_normal_device = pts_normal.to(device)
-            verts_normal_device = verts_normal.to(device) if verts_normal is not None else None
+            pts_normal_device = pts_normal.to(**_to)
+            verts_normal_device = verts_normal.to(**_to) if verts_normal is not None else None
 
             pts_with_normal = torch.cat([pts_device, pts_normal_device], dim=-1)
             verts_with_normal = (
@@ -393,10 +424,10 @@ def infer(
         joints_out = model_joints(pts_device).joints.cpu()
 
         # Prepare joints for pose model
-        joints_for_pose = joints_out.clone().to(device)
+        joints_for_pose = joints_out.clone().to(**_to)
         pose = model_pose(pts_device, joints=joints_for_pose).pose_trans.cpu()
 
-    data.mesh.vertices = verts.squeeze(0).cpu().numpy()
+    data.mesh.vertices = verts.squeeze(0).cpu().float().numpy()
     data.pts = pts
     data.verts = verts
     data.bw = bw

@@ -116,7 +116,7 @@ class TransformMLP(nn.Module):
         Returns:
             [B, N, `transl_dim` + `rotation_dim` + `scaling_dim`]
         """
-        empty = torch.empty(*feat.shape[:2], 0, device=feat.device)
+        empty = torch.empty(*feat.shape[:2], 0, device=feat.device, dtype=feat.dtype)
         transl = self.transl_mlp(feat) if self.transl_dim > 0 else empty
         if self.rotation_dim > 0:
             if self.rotation_dim == 4:

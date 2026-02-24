@@ -320,7 +320,12 @@ class MIALoadModel:
     @classmethod
     def INPUT_TYPES(cls):
         return {
-            "required": {
+            "required": {},
+            "optional": {
+                "precision": (["auto", "bf16", "fp16", "fp32"], {
+                    "default": "auto",
+                    "tooltip": "Model precision. auto: best for your GPU (bf16 on Ampere+, fp16 on Volta/Turing, fp32 on older)."
+                }),
                 "cache_to_gpu": ("BOOLEAN", {
                     "default": True,
                     "tooltip": "Keep models on GPU for faster inference. Disable to save VRAM."
@@ -333,10 +338,22 @@ class MIALoadModel:
     FUNCTION = "load_models"
     CATEGORY = "UniRig/MIA"
 
-    def load_models(self, cache_to_gpu=True):
-        """Return MIA config. Models are loaded by MIAAutoRig when needed."""
-        log.info("MIA config: cache_to_gpu=%s", cache_to_gpu)
+    def load_models(self, precision="auto", cache_to_gpu=True):
+        """Return MIA config with resolved precision."""
+        device = mm.get_torch_device()
+        if precision == "auto":
+            if mm.should_use_bf16(device):
+                dtype = "bf16"
+            elif mm.should_use_fp16(device):
+                dtype = "fp16"
+            else:
+                dtype = "fp32"
+        else:
+            dtype = precision
+
+        log.info("MIA config: precision=%s -> %s, cache_to_gpu=%s", precision, dtype, cache_to_gpu)
         return ({
             "backend": "mia",
             "cache_to_gpu": cache_to_gpu,
+            "dtype": dtype,
         },)

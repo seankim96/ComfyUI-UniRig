@@ -25,6 +25,7 @@ import numpy as np
 import logging
 
 import comfy.ops
+import comfy.utils
 
 from .attention import comfy_attention
 
@@ -646,7 +647,7 @@ def get_encoder(pretrained_path: str = None, freeze_decoder: bool = False,
                 **kwargs) -> AlignedShapeLatentPerceiver:
     model = AlignedShapeLatentPerceiver(**kwargs)
     if pretrained_path is not None:
-        state_dict = torch.load(pretrained_path, weights_only=True)
+        state_dict = comfy.utils.load_torch_file(pretrained_path)
         model.load_state_dict(state_dict)
     if freeze_decoder:
         model.geo_decoder.requires_grad_(False)
@@ -661,6 +662,6 @@ def get_encoder_simplified(pretrained_path: str = None,
                            **kwargs) -> ShapeAsLatentPerceiverEncoder:
     model = ShapeAsLatentPerceiverEncoder(**kwargs)
     if pretrained_path is not None:
-        state_dict = torch.load(pretrained_path, weights_only=True)
+        state_dict = comfy.utils.load_torch_file(pretrained_path)
         model.load_state_dict(state_dict)
     return model

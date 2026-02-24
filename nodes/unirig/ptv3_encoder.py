@@ -29,6 +29,7 @@ from timm.models.layers import DropPath
 from einops import rearrange
 
 import comfy.ops
+import comfy.utils
 from comfy.attention_sparse import dispatch_varlen_attention
 
 from .serialization import encode, decode
@@ -269,10 +270,12 @@ class RPE(torch.nn.Module):
 
 class QueryKeyNorm(nn.Module):
     """No learnable weights (elementwise_affine=False)."""
-    def __init__(self, channels, num_heads):
+    def __init__(self, channels, num_heads, dtype=None, device=None, operations=None):
         super(QueryKeyNorm, self).__init__()
+        if operations is None:
+            operations = comfy.ops.disable_weight_init
         self.num_heads = num_heads
-        self.norm = nn.LayerNorm(channels // num_heads, elementwise_affine=False)
+        self.norm = operations.LayerNorm(channels // num_heads, elementwise_affine=False, dtype=dtype, device=device)
 
     def forward(self, qkv):
         H = self.num_heads
@@ -317,7 +320,7 @@ class SerializedAttention(PointModule):
         self.enable_flash = enable_flash
         self.enable_qknorm = enable_qknorm
         if enable_qknorm:
-            self.qknorm = QueryKeyNorm(channels, num_heads)
+            self.qknorm = QueryKeyNorm(channels, num_heads, dtype=dtype, device=device, operations=operations)
         else:
             log.warning("WARNING: enable_qknorm is False in PTv3Object and training may be fragile")
 
@@ -878,7 +881,7 @@ class PointTransformerV3Object(PointModule):
 def get_encoder(pretrained_path: Union[str, None] = None, freeze_encoder: bool = False, **kwargs) -> PointTransformerV3Object:
     point_encoder = PointTransformerV3Object(**kwargs)
     if pretrained_path is not None:
-        checkpoint = torch.load(pretrained_path, map_location="cpu", weights_only=True)
+        checkpoint = comfy.utils.load_torch_file(pretrained_path)
         state_dict = checkpoint["state_dict"]
         state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
         point_encoder.load_state_dict(state_dict, strict=False)

@@ -39,3 +39,4 @@ embreex = "*"
 [target.win-64.pypi-dependencies]
 triton-windows = "*"
 embreex = "*"
+comfy-sparse-attn = "*"

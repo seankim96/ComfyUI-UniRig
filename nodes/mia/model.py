@@ -7,6 +7,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import repeat
 import logging
+import comfy.ops
+import comfy.utils
 
 log = logging.getLogger("unirig")
 # Lazy import torch_cluster - not available in ComfyUI main process
@@ -70,14 +72,16 @@ class Embedder3D(nn.Module):
 
 
 class JointsEmbedder(nn.Module):
-    def __init__(self, include_tail=False, embed_dim=48, out_dim=512, concat_input=True, out_mlp=True):
+    def __init__(self, include_tail=False, embed_dim=48, out_dim=512, concat_input=True, out_mlp=True, operations=None):
         super().__init__()
+        if operations is None:
+            operations = comfy.ops.disable_weight_init
         self.embed = Embedder3D(embed_dim, concat_input=concat_input)
         self.point_num = 2 if include_tail else 1
         self.embedding_dim = self.point_num * (embed_dim + (3 if concat_input else 0))
         self.out_mlp = out_mlp
         if self.out_mlp:
-            self.mlp = nn.Linear(self.embedding_dim, out_dim)
+            self.mlp = operations.Linear(self.embedding_dim, out_dim)
 
     def forward(self, joints: torch.Tensor):
         """
@@ -93,21 +97,23 @@ class JointsEmbedder(nn.Module):
 
 
 class TransformMLP(nn.Module):
-    def __init__(self, in_dim: int, transl_dim=3, rotation_dim=4, scaling_dim=3):
+    def __init__(self, in_dim: int, transl_dim=3, rotation_dim=4, scaling_dim=3, operations=None):
         super().__init__()
+        if operations is None:
+            operations = comfy.ops.disable_weight_init
         self.transl_dim = transl_dim
         self.rotation_dim = rotation_dim
         self.scaling_dim = scaling_dim
         if self.transl_dim > 0:
-            self.transl_mlp = nn.Linear(in_dim, transl_dim)
+            self.transl_mlp = operations.Linear(in_dim, transl_dim)
         if self.rotation_dim > 0:
             if self.rotation_dim == 4:  # quaternions
-                self.rotation_mlp_scalar = nn.Linear(in_dim, 1)
-                self.rotation_mlp_vector = nn.Linear(in_dim, rotation_dim - 1)
+                self.rotation_mlp_scalar = operations.Linear(in_dim, 1)
+                self.rotation_mlp_vector = operations.Linear(in_dim, rotation_dim - 1)
             else:
-                self.rotation_mlp = nn.Linear(in_dim, rotation_dim)
+                self.rotation_mlp = operations.Linear(in_dim, rotation_dim)
         if self.scaling_dim > 0:
-            self.scaling_mlp = nn.Linear(in_dim, scaling_dim)
+            self.scaling_mlp = operations.Linear(in_dim, scaling_dim)
 
     def forward(self, feat: torch.Tensor):
         """
@@ -134,12 +140,14 @@ class TransformMLP(nn.Module):
 
 
 class JointsAttention(nn.Module):
-    def __init__(self, feat_dim: int, heads=8, dim_head=64, masked=True, kinematic_tree: Joint = None, *args, **xargs):
+    def __init__(self, feat_dim: int, heads=8, dim_head=64, masked=True, kinematic_tree: Joint = None, operations=None, *args, **xargs):
         super().__init__()
+        if operations is None:
+            operations = comfy.ops.disable_weight_init
 
-        self.norm_pre = nn.LayerNorm(feat_dim)
-        self.attn = Attention(query_dim=feat_dim, heads=heads, dim_head=dim_head, *args, **xargs)
-        self.norm_after = nn.LayerNorm(feat_dim)
+        self.norm_pre = operations.LayerNorm(feat_dim)
+        self.attn = Attention(query_dim=feat_dim, heads=heads, dim_head=dim_head, operations=operations, *args, **xargs)
+        self.norm_after = operations.LayerNorm(feat_dim)
 
         if masked:
             assert kinematic_tree is not None
@@ -169,11 +177,13 @@ class JointsAttention(nn.Module):
 
 
 class InputAttention(nn.Module):
-    def __init__(self, feat_dim: int, heads=8, dim_head=64, *args, **xargs):
+    def __init__(self, feat_dim: int, heads=8, dim_head=64, operations=None, *args, **xargs):
         super().__init__()
-        self.norm = nn.LayerNorm(feat_dim)
-        self.norm_context = nn.LayerNorm(feat_dim)
-        self.attn = Attention(query_dim=feat_dim, heads=heads, dim_head=dim_head, *args, **xargs)
+        if operations is None:
+            operations = comfy.ops.disable_weight_init
+        self.norm = operations.LayerNorm(feat_dim)
+        self.norm_context = operations.LayerNorm(feat_dim)
+        self.attn = Attention(query_dim=feat_dim, heads=heads, dim_head=dim_head, operations=operations, *args, **xargs)
         nn.init.zeros_(self.attn.to_out.weight)
         nn.init.zeros_(self.attn.to_out.bias)
 
@@ -229,11 +239,14 @@ class PCAE(nn.Module):
         pose_attn_masked=True,
         pose_attn_causal=False,
         grid_density=128,
+        operations=None,
     ):
         super().__init__()
+        if operations is None:
+            operations = comfy.ops.disable_weight_init
 
         self.N = N
-        self.base = create_autoencoder(dim=512, M=num_latents, N=self.N, latent_dim=8, deterministic=deterministic)
+        self.base = create_autoencoder(dim=512, M=num_latents, N=self.N, latent_dim=8, deterministic=deterministic, operations=operations)
         embed_dim = self.base.point_embed.mlp.out_features
         feat_dim = self.base.decoder_cross_attn.fn.to_out.out_features
 
@@ -241,7 +254,7 @@ class PCAE(nn.Module):
         self.input_normal = input_normal
         if self.input_normal:
             self.input_dims.append(3)
-            self.normal_embed = JointsEmbedder(out_dim=embed_dim)
+            self.normal_embed = JointsEmbedder(out_dim=embed_dim, operations=operations)
             nn.init.zeros_(self.normal_embed.mlp.weight)
             nn.init.zeros_(self.normal_embed.mlp.bias)
         else:
@@ -252,7 +265,7 @@ class PCAE(nn.Module):
         else:
             self.input_attention = input_attention
         if self.input_attention:
-            self.input_attn = InputAttention(embed_dim)
+            self.input_attn = InputAttention(embed_dim, operations=operations)
 
         self.hierarchical_ratio = float(hierarchical_ratio)
         assert 0 <= hierarchical_ratio < 1.0, f"{hierarchical_ratio=} must be in [0, 1)"
@@ -261,7 +274,7 @@ class PCAE(nn.Module):
 
         self.predict_bw = predict_bw
         if self.predict_bw:
-            self.bw_head = nn.Linear(feat_dim, self.output_dim)
+            self.bw_head = operations.Linear(feat_dim, self.output_dim)
             output_actvn = output_actvn.lower()
             if output_actvn == "softmax":
                 # self.actvn = nn.LogSoftmax(dim=-1) if self.output_actvn_log else nn.Sigmoid(dim=-1)
@@ -289,8 +302,8 @@ class PCAE(nn.Module):
             self.joints_attn_causal = joints_attn_causal
             if joints_attn:
                 self.joints_head = nn.Sequential(
-                    JointsAttention(feat_dim, masked=joints_attn_masked, kinematic_tree=kinematic_tree),
-                    nn.Linear(feat_dim, joints_dim),
+                    JointsAttention(feat_dim, masked=joints_attn_masked, kinematic_tree=kinematic_tree, operations=operations),
+                    operations.Linear(feat_dim, joints_dim),
                 )
             elif self.joints_attn_causal:
                 self.joints_head = JointsAttentionCausal(
@@ -300,14 +313,15 @@ class PCAE(nn.Module):
                     include_joints_tail=self.predict_joints_tail,
                     out_dim=joints_dim,
                     query_type="embedding",
+                    operations=operations,
                 )
             else:
-                self.joints_head = nn.Linear(feat_dim, joints_dim)
+                self.joints_head = operations.Linear(feat_dim, joints_dim)
 
         self.predict_global_trans = predict_global_trans
         if self.predict_global_trans:
             self.global_embed = nn.Parameter(torch.randn(1, 1, embed_dim))
-            self.global_head = TransformMLP(feat_dim, transl_dim=3, rotation_dim=4, scaling_dim=1)
+            self.global_head = TransformMLP(feat_dim, transl_dim=3, rotation_dim=4, scaling_dim=1, operations=operations)
 
         self.predict_pose_trans = predict_pose_trans
         assert pose_mode in (
@@ -327,19 +341,19 @@ class PCAE(nn.Module):
             self.pose_embed = nn.Parameter(torch.randn(1, self.output_dim, embed_dim))
             if "local" in self.pose_mode or self.pose_mode in ("quat", "ortho6d"):
                 rotation_dim = pose_dim = 6 if "ortho6d" in self.pose_mode else 4
-                self.pose_head = TransformMLP(feat_dim, transl_dim=0, rotation_dim=rotation_dim, scaling_dim=0)
+                self.pose_head = TransformMLP(feat_dim, transl_dim=0, rotation_dim=rotation_dim, scaling_dim=0, operations=operations)
             else:
                 transl_dim = 4 if self.pose_mode == "dual_quat" else 3
                 rotation_dim = 6 if "ortho6d" in self.pose_mode else 4
                 pose_dim = transl_dim + rotation_dim
-                self.pose_head = TransformMLP(feat_dim, transl_dim=transl_dim, rotation_dim=rotation_dim, scaling_dim=0)
+                self.pose_head = TransformMLP(feat_dim, transl_dim=transl_dim, rotation_dim=rotation_dim, scaling_dim=0, operations=operations)
             if self.pose_input_joints:
-                self.joints_embedder = JointsEmbedder(include_tail=True, out_dim=embed_dim)
+                self.joints_embedder = JointsEmbedder(include_tail=True, out_dim=embed_dim, operations=operations)
             assert not (pose_attn and pose_attn_causal), "Conflict arguments: pose_attn & pose_attn_causal"
             self.pose_attn_causal = pose_attn_causal
             if pose_attn:
                 self.pose_head = nn.Sequential(
-                    JointsAttention(feat_dim, masked=pose_attn_masked, kinematic_tree=kinematic_tree), self.pose_head
+                    JointsAttention(feat_dim, masked=pose_attn_masked, kinematic_tree=kinematic_tree, operations=operations), self.pose_head
                 )
             elif self.pose_attn_causal:
                 self.pose_head = JointsAttentionCausal(
@@ -349,6 +363,7 @@ class PCAE(nn.Module):
                     out_dim=pose_dim,
                     rotation_dim=rotation_dim,
                     query_type="embedding",
+                    operations=operations,
                 )
 
         self.grid_density = grid_density
@@ -413,7 +428,7 @@ class PCAE(nn.Module):
 
     def load(self, pth_path: str, epoch=-1, strict=True, adapt=True):
         pth_path = find_ckpt(pth_path, epoch=epoch)
-        checkpoint = torch.load(pth_path, map_location="cpu", weights_only=True)
+        checkpoint = comfy.utils.load_torch_file(pth_path)
         model_state_dict = checkpoint["model"]
         if adapt:
             model_state_dict = self.adapt_ckpt(model_state_dict)
@@ -425,7 +440,7 @@ class PCAE(nn.Module):
         return self
 
     def load_base(self, pth_path: str):
-        self.base.load_state_dict(torch.load(pth_path, map_location="cpu", weights_only=True)["model"], strict=True)
+        self.base.load_state_dict(comfy.utils.load_torch_file(pth_path)["model"], strict=True)
         log.info("Loaded base model from %s", pth_path)
         return self
 
@@ -677,15 +692,17 @@ class PCAE(nn.Module):
 
 
 class JointsDiscriminator(nn.Module):
-    def __init__(self, joints_num=22 * 2, feat_dim=512):
+    def __init__(self, joints_num=22 * 2, feat_dim=512, operations=None):
         super().__init__()
-        self.embed = JointsEmbedder(include_tail=True, out_mlp=False)
+        if operations is None:
+            operations = comfy.ops.disable_weight_init
+        self.embed = JointsEmbedder(include_tail=True, out_mlp=False, operations=operations)
         self.mlp = nn.Sequential(
-            nn.Linear(joints_num * self.embed.embedding_dim, feat_dim),
+            operations.Linear(joints_num * self.embed.embedding_dim, feat_dim),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(feat_dim, feat_dim // 2),
+            operations.Linear(feat_dim, feat_dim // 2),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(feat_dim // 2, 1),
+            operations.Linear(feat_dim // 2, 1),
             # nn.Sigmoid(),
         )
 
@@ -745,13 +762,15 @@ class Transformer(nn.Module):
 
 
 class JointsDiscriminatorAttn(nn.Module):
-    def __init__(self, num_joints=52 * 2, feat_dim=512, depth=8):
+    def __init__(self, num_joints=52 * 2, feat_dim=512, depth=8, operations=None):
         super().__init__()
-        self.embed = JointsEmbedder(include_tail=True, out_dim=feat_dim)
+        if operations is None:
+            operations = comfy.ops.disable_weight_init
+        self.embed = JointsEmbedder(include_tail=True, out_dim=feat_dim, operations=operations)
         self.pos_embedding = nn.Parameter(torch.randn(1, num_joints + 1, feat_dim))
         self.cls_token = nn.Parameter(torch.randn(1, 1, feat_dim))
         self.transformer = Transformer(feat_dim, depth=depth)
-        self.cls_head = nn.Linear(feat_dim, 1)
+        self.cls_head = operations.Linear(feat_dim, 1)
 
     def forward(self, joints: torch.Tensor, mask: torch.Tensor = None):
         """
@@ -809,22 +828,25 @@ class JointsAttentionCausal(nn.Module):
         rotation_dim=4,
         query_type="embedding",
         zero_init=False,
+        operations=None,
     ):
         super().__init__()
+        if operations is None:
+            operations = comfy.ops.disable_weight_init
 
         self.transformer = Transformer(feat_dim, depth=depth, heads=heads, norm_first=True, zero_init=zero_init)
         self.out_type = out_type
         self.out_dim = out_dim
         if self.out_type == "joints":
-            self.encoder = JointsEmbedder(include_tail=include_joints_tail, out_dim=feat_dim)
-            self.decoder = nn.Linear(feat_dim, self.out_dim)
+            self.encoder = JointsEmbedder(include_tail=include_joints_tail, out_dim=feat_dim, operations=operations)
+            self.decoder = operations.Linear(feat_dim, self.out_dim)
         elif self.out_type == "pose":
-            self.encoder = nn.Linear(self.out_dim, feat_dim)
+            self.encoder = operations.Linear(self.out_dim, feat_dim)
             if zero_init:
                 nn.init.zeros_(self.encoder.weight)
                 nn.init.zeros_(self.encoder.bias)
             self.decoder = TransformMLP(
-                feat_dim, transl_dim=self.out_dim - rotation_dim, rotation_dim=rotation_dim, scaling_dim=0
+                feat_dim, transl_dim=self.out_dim - rotation_dim, rotation_dim=rotation_dim, scaling_dim=0, operations=operations
             )
         else:
             raise NotImplementedError(f"{self.out_type=}")

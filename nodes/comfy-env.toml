@@ -12,6 +12,7 @@ numpy = "<2.0"
 trimesh = { version = "*", extras = ["easy"] }
 psutil = "*"
 comfy-aimdo = "*"
+comfy-sparse-attn = "*"
 
 # ML libs
 transformers = "==4.51.3"
@@ -39,4 +40,3 @@ embreex = "*"
 [target.win-64.pypi-dependencies]
 triton-windows = "*"
 embreex = "*"
-comfy-sparse-attn = "*"

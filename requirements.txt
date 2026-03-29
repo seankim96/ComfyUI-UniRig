@@ -10,3 +10,4 @@ numpy
 scipy
 libigl
 hf_xet
+bpy==3.6.0
